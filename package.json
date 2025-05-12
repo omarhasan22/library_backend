@@ -1,24 +1,36 @@
 {
-  "name": "node-express-mongodb",
+  "name": "jwt_nodejs",
   "version": "1.0.0",
-  "description": "Node.js Restful CRUD API with Node.js, Express and MongoDB",
-  "main": "server.js",
+  "description": "jwt authentication in nodejs",
+  "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AzzanKhan/JWT-Authentication-for-MEAN-Stack.git"
   },
   "keywords": [
+    "jwt",
     "nodejs",
     "express",
-    "rest",
-    "api",
-    "mongodb"
+    "mean",
+    "authentication"
   ],
-  "author": "bezkoder",
+  "author": "Azzan",
   "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/AzzanKhan/JWT-Authentication-for-MEAN-Stack/issues"
+  },
+  "homepage": "https://github.com/AzzanKhan/JWT-Authentication-for-MEAN-Stack#readme",
   "dependencies": {
+    "bcrypt": "^5.0.1",
+    "body-parser": "^1.20.0",
     "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "mongoose": "^6.11.1",
-    "nodemon": "^3.1.10"
+    "dotenv": "^16.0.1",
+    "jsonwebtoken": "^8.5.1",
+    "mongoose": "^6.3.4",
+    "swagger-jsdoc": "^6.2.1",
+    "swagger-ui-express": "^4.5.0"
   }
 }
