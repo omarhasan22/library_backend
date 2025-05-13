@@ -9,7 +9,6 @@ const loginCtrl = require('../controllers/login.controller');
 const homeCtrl = require('../controllers/home.controller')
 const refreshCtrl = require('../controllers/refresh.controller')
 const { isAuthenticate } = require('../middlewares/authenticate');
-const { off } = require('../app');
 
 //JWT Authentication
 router.post('/users/register',registrationCtrl.register)
@@ -249,5 +248,15 @@ router.delete('/delete', async (req,res)=>{
         res.status(500).json(err.message)
     }
 })
+
+
+const bookController = require('../controllers/book.controller');
+// مسارات الكتاب
+router.post('/books', bookController.createBook);
+router.get('/books', bookController.getAllBooks);
+router.get('/books/:id', bookController.getBookById);
+router.put('/books/:id', bookController.updateBook);
+router.delete('/books/:id', bookController.deleteBook);
+
 
 module.exports = router
