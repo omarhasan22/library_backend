@@ -1,39 +1,22 @@
-const jwt = require('jsonwebtoken')
-const access_secret = process.env.ACCESS_TOKEN_SECRET
-const refresh_secret = process.env.REFRESH_TOKEN_SECRET
+const jwt = require('jsonwebtoken');
 
-module.exports.getAccessToken = (username) => {
-    return new Promise((resolve,reject)=>{
-        jwt.sign({username},access_secret,{expiresIn:60},(err,token)=>{
-            if(err) reject(err)
-            resolve(token)
-        })
-    })
+class TokenService {
+  generateAccessToken(user) {
+    return jwt.sign({ userId: user._id }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
+  }
+
+  generateRefreshToken(user) {
+    return jwt.sign({ userId: user._id }, process.env.REFRESH_TOKEN_SECRET, { expiresIn: '7d' });
+  }
+
+  verifyAccessToken(token) {
+    return jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+  }
+
+  verifyRefreshToken(token) {
+    return jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
+  }
+  
 }
 
-module.exports.getRefreshToken = (username) => {
-    return new Promise((resolve,reject)=>{
-        jwt.sign({username},refresh_secret,{expiresIn:300},(err,token)=>{
-            if(err) reject(err)
-            resolve(token)
-        })
-    })
-}
-
-module.exports.verifyAccessToken = (accessToken) => {
-    return new Promise((resolve,reject)=>{
-        jwt.verify(accessToken,access_secret,(err,decode)=>{
-            if(err) reject(err)
-            resolve(decode.username)
-        })
-    })
-}
-
-module.exports.verifyRefreshToken = (refreshToken) => {
-    return new Promise((resolve,reject)=>{
-        jwt.verify(refreshToken,refresh_secret,(err,decode)=>{
-            if(err) reject(err)
-            resolve(decode.username)
-        })
-    })
-}
+module.exports = new TokenService();

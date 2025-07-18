@@ -1,19 +1,18 @@
-const tokenService = require('../services/token.service')
+const tokenService = require('../services/token.service');
+const User = require('../models/users.model');
 
-module.exports.refresh = async (req,res) => {
-    try{
-        const { token } = req.body
-        console.log(token)
-        if(token){
-            const username = await tokenService.verifyRefreshToken(token)
-            const accessToken = await tokenService.getAccessToken(username)
-            res.send({accessToken})
-        }
-        else{
-            res.status(403).send('token Unavailable!!')
-        }
-    }catch(err){
-        console.log(err)
-        res.status(500).json(err)
-    }
-}
+exports.refresh = async (req, res) => {
+  const { refreshToken } = req.body;
+
+  try {
+    const decoded = tokenService.verifyRefreshToken(refreshToken);
+    const user = await User.findById(decoded.userId);
+
+    if (!user) throw new Error('User not found');
+
+    const newAccessToken = tokenService.generateAccessToken(user);
+    res.status(200).json({ accessToken: newAccessToken });
+  } catch (err) {
+    res.status(403).json({ error: err.message });
+  }
+};
