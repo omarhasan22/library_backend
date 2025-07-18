@@ -1,262 +1,117 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose')
-const User = mongoose.model('User')
-const bcrypt = require('bcrypt')
+const mongoose = require('mongoose');
+const User = mongoose.model('User');
+const bcrypt = require('bcrypt');
+const upload  = require('../middlewares/multer');
 
 const registrationCtrl = require('../controllers/registration.controller');
 const loginCtrl = require('../controllers/login.controller');
-const homeCtrl = require('../controllers/home.controller')
-const refreshCtrl = require('../controllers/refresh.controller')
+const refreshCtrl = require('../controllers/refresh.controller');
 const { isAuthenticate } = require('../middlewares/authenticate');
 
-//JWT Authentication
-router.post('/users/register',registrationCtrl.register)
-router.post('/users/login',loginCtrl.login)
-router.get('/home', isAuthenticate, homeCtrl.home)
-router.post('/refresh',refreshCtrl.refresh)
-
-//CRUD Operations
-
-/**
- * @swagger
- * components:
- *   schemas:
- *     User:
- *       type: object
- *       required:
- *         - username
- *         - password
- *       properties:
- *         username:
- *           type: string
- *           description: username for user
- *         nickname:
- *           type: string
- *           description: nickname for user
- *         password:
- *           type: string
- *           description: password
- *       example:
- *         username: swagger
- *         nickname: openAPI
- *         password: test@123
- */
-
-//C-Create
-/**
- * @swagger
- * /create:
- *   post:
- *     summary: creates a new user
- *     tags: ['Create Operation']
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/User'
- *     responses:
- *       200:
- *         description: creates user
- *       500:
- *          description: error
- */
-router.post('/create', async (req,res)=>{
-    try{
-        const user = new User(req.body)
-        user.password = bcrypt.hashSync(user.password,bcrypt.genSaltSync(10))
-        const result = await User.create(user);
-        //const result = await user.save();  this can also be used
-        res.send(`${result.username} successfully created!!`)
-    }catch(err){
-        res.status(500).send(err.message)
-    }
-})
-
-//R-Reading single record
-/**
- * @swagger
- * /read/{username}:
- *   get:
- *     summary: Returns the user
- *     tags: ['Read Operations']
- *     parameters:
- *        - in: path
- *          name: username
- *          schema:
- *              type: string
- *              required: true
- *          description: username to find the user
- *     responses:
- *       200:
- *         description: Returns the user
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                  id:
- *                      type: string
- *                      description: auto generated in database
- *                  username:
- *                      type: string
- *                      description: username for user
- *                  nickname:
- *                      type: string
- *                      description: nickname for user
- *                  password:
- *                      type: string
- *                      description: password
- *       404:
- *          description: user not found
- *       500:
- *          description: server error
- */
-router.get('/read/:username', async (req,res)=>{
-    try{
-        const username = req.params.username
-        const result = await User.findOne({username});
-        if(result)
-            return res.send(result)
-        else 
-            return res.status(404).send(`${username} does not exist`)
-    }catch(err){
-        res.status(500).send(err)
-    }
-})
-
-//Reading multiple records
-/**
- * @swagger
- * /read:
- *   get:
- *     summary: Returns the list of all users
- *     tags: ['Read Operations']
- *     responses:
- *       200:
- *         description: the list of all users
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *       500:
- *         description: internal error
- */
-router.get('/read', async (req,res)=>{
-    try{
-        const result = await User.find();
-        return res.send(result)
-    }catch(err){
-        res.status(500).send(err)
-    }
-})
-
-//U-Update
-/**
- * @swagger
- * /update:
- *   put:
- *     summary: Updates nickname of a user
- *     tags: ['Update Operation']
- *     requestBody:
- *      required: true
- *      content:
- *          application/json:
- *              schema:
- *                  type: object
- *                  required:
- *                      - username
- *                      - nickname
- *                  properties:
- *                      username:
- *                          type: string
- *                          description: username for user
- *                      nickname:
- *                          type: string
- *                          description: nickname for user
- *                  example:
- *                      username: swagger
- *                      nickname: openAPI 3.0
- *     responses:
- *       200:
- *         description: Returns the updated user
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *       500:
- *          description: failed operation
- */
-router.put('/update', async (req,res)=>{
-    try{
-        const username = req.body.username
-        const newNickName = req.body.nickname
-        const result = await User.findOneAndUpdate(
-            { username: username },
-            {
-              $set: {
-                nickname: newNickName,
-              }
-            },
-            { new: true }
-          );
-        res.send(result)
-    }catch(err){
-        res.status(500).json(err.message)
-    }
-})
-
-//D-DELETE
-
-/**
- * @swagger
- * /delete:
- *   delete:
- *     summary: deletes a user
- *     tags: ['Delete Operation']
- *     requestBody:
- *      required: true
- *      content:
- *          application/json:
- *              schema:
- *                  type: object
- *                  required:
- *                      - username
- *                  properties:
- *                      username:
- *                          type: string
- *                          description: username for user
- *                  example:
- *                      username: swagger
- *     responses:
- *       200:
- *         description: Returns the result of delete operation
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *       500:
- *          description: failed operation
- */
-router.delete('/delete', async (req,res)=>{
-    try{
-        const username = req.body.username
-        const result = await User.deleteOne({username});
-        res.send(result)
-    }catch(err){
-        res.status(500).json(err.message)
-    }
-})
-
-
 const bookController = require('../controllers/book.controller');
-// مسارات الكتاب
-router.post('/books', bookController.createBook);
+const BorrowController = require('../controllers/borrow.controller');
+
+// AUTH ROUTES
+router.post('/auth/register', registrationCtrl.register);
+router.post('/auth/login', loginCtrl.login);
+router.post('/auth/refresh', refreshCtrl.refresh);
+
+// USER CRUD OPERATIONS
+router.post('/users/create', async (req, res) => {
+  try {
+    const user = new User(req.body);
+    user.password = bcrypt.hashSync(user.password, bcrypt.genSaltSync(10));
+    const result = await User.create(user);
+    res.json({ message: `${result.username} successfully created!` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/users/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const user = await User.findOne({ username });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// router.get('/users/:userId', async (req, res) => {
+//  // try {
+//     console.log(123444448);
+    
+//     const _id  = req.params.userId;
+//     let users;
+//     console.log("_id");
+    
+//     users = await User.findOne({_id});
+//     console.log(users);
+  
+//     res.json(users);
+//   // } catch (err) {
+//   //   res.status(500).json({ error: err.message });
+//   // }
+// });
+
+router.get('/users/userId/:userId', loginCtrl.getUser);
+
+
+router.put('/users/update', async (req, res) => {
+  try {
+    const { username, nickname } = req.body;
+    const updatedUser = await User.findOneAndUpdate(
+      { username },
+      { $set: { nickname } },
+      { new: true }
+    );
+    res.json(updatedUser);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/users/delete', async (req, res) => {
+  try {
+    const { username } = req.body;
+    const result = await User.deleteOne({ username });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// BOOK ROUTES
+router.post('/books',
+  // isAuthenticate,
+   upload.single('image'),
+    bookController.createBook);
 router.get('/books', bookController.getAllBooks);
 router.get('/books/:id', bookController.getBookById);
-router.put('/books/:id', bookController.updateBook);
-router.delete('/books/:id', bookController.deleteBook);
+router.put('/books/:id', isAuthenticate, bookController.updateBook);
+router.delete('/books/:id', isAuthenticate, bookController.deleteBook);
+
+router.get('/categories', bookController.getCategories);
+router.get('/categories/:category-id', bookController.getCategoryById);
+
+router.get('/subjects', bookController.getsubjects);
 
 
-module.exports = router
+// BORROW ROUTES
+router.post('/borrows/borrow', isAuthenticate, BorrowController.borrowBook);
+router.put('/borrows/return/:id', isAuthenticate, BorrowController.returnBook);
+router.get('/borrows/borrowed', isAuthenticate, BorrowController.getBorrowedBooks);
+
+
+router.get('/people', bookController.getPeople);
+
+router.get('/publishers', bookController.getPublishers);
+
+
+
+module.exports = router;
