@@ -41,18 +41,22 @@ const dbURI = process.env.MONGO_URI_PROD ;
 console.log(`Using database URIiiii: ${dbURI}`);
 console.log(process.env.MONGO_URI_PROD);
 
+
+
 if (!dbURI) {
 	console.error('❌ Database URI is missing!');
 	process.exit(1); // Stop the server if no URI is provided
 }
+const connectionOptions = { useCreateIndex: true, useNewUrlParser: true, useUnifiedTopology: true, useFindAndModify: false };
+mongoose.connect(process.env.dbURI, connectionOptions);
 
-mongoose
-	.connect(dbURI, {
-		useNewUrlParser: true,
-		useUnifiedTopology: true,
-	})
-	.then(() => console.log(`✅ MongoDB connected (${isProduction ? 'production' : 'development'})`))
-	.catch((err) => console.error('❌ MongoDB connection error:', err));
+// mongoose
+// 	.connect(dbURI, {
+// 		useNewUrlParser: true,
+// 		useUnifiedTopology: true,
+// 	})
+// 	.then(() => console.log(`✅ MongoDB connected (${isProduction ? 'production' : 'development'})`))
+// 	.catch((err) => console.error('❌ MongoDB connection error:', err));
 
 mongoose.Promise = global.Promise;
 
