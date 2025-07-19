@@ -35,15 +35,21 @@ app.use(cors())
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-const dbURI = process.env.DB_URI;
+const isProduction = process.env.NODE_ENV === 'production';
+const dbURI = isProduction ? process.env.MONGO_URI_PROD : process.env.MONGO_URI_LOCAL;
+
+if (!dbURI) {
+	console.error('❌ Database URI is missing!');
+	process.exit(1); // Stop the server if no URI is provided
+}
 
 mongoose
 	.connect(dbURI, {
 		useNewUrlParser: true,
 		useUnifiedTopology: true,
 	})
-	.then(() => console.log("Database Connected"))
-	.catch((err) => console.log(err));
+	.then(() => console.log(`✅ MongoDB connected (${isProduction ? 'production' : 'development'})`))
+	.catch((err) => console.error('❌ MongoDB connection error:', err));
 
 mongoose.Promise = global.Promise;
 
