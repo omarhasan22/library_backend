@@ -38,25 +38,21 @@ app.use(express.json());
 const isProduction = process.env.NODE_ENV === 'production';
 // const dbURI = isProduction ? process.env.MONGO_URI_PROD : process.env.MONGO_URI_LOCAL;
 const dbURI = process.env.MONGO_URI_PROD ;
-console.log(`Using database URIiiii: ${dbURI}`);
+console.log(`Using database URI: ${dbURI}`);
 console.log(process.env.MONGO_URI_PROD);
-
-
 
 if (!dbURI) {
 	console.error('❌ Database URI is missing!');
 	process.exit(1); // Stop the server if no URI is provided
 }
-const connectionOptions = { useNewUrlParser: true, useUnifiedTopology: true };
-mongoose.connect('mongodb+srv://omarhasan3894:81195404OMAR@cluster0.1ufuyxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', connectionOptions);
 
-// mongoose
-// 	.connect(dbURI, {
-// 		useNewUrlParser: true,
-// 		useUnifiedTopology: true,
-// 	})
-// 	.then(() => console.log(`✅ MongoDB connected (${isProduction ? 'production' : 'development'})`))
-// 	.catch((err) => console.error('❌ MongoDB connection error:', err));
+mongoose
+	.connect(dbURI, {
+		useNewUrlParser: true,
+		useUnifiedTopology: true,
+	})
+	.then(() => console.log(`✅ MongoDB connected (${isProduction ? 'production' : 'development'})`))
+	.catch((err) => console.error('❌ MongoDB connection error:', err));
 
 mongoose.Promise = global.Promise;
 
