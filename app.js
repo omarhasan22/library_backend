@@ -47,7 +47,7 @@ if (!dbURI) {
 	console.error('❌ Database URI is missing!');
 	process.exit(1); // Stop the server if no URI is provided
 }
-const connectionOptions = { useCreateIndex: true, useNewUrlParser: true, useUnifiedTopology: true };
+const connectionOptions = { useNewUrlParser: true, useUnifiedTopology: true };
 mongoose.connect('mongodb+srv://omarhasan3894:81195404OMAR@cluster0.1ufuyxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', connectionOptions);
 
 // mongoose
