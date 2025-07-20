@@ -47,7 +47,7 @@ if (!dbURI) {
 }
 
 mongoose
-	.connect('mongodb+srv://omarhasan22:81195404OMAR@cluster0.1ufuyxn.mongodb.net/?retryWrites=true&w=majority', {
+	.connect('mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/?retryWrites=true&w=majority', {
 		useNewUrlParser: true,
 		useUnifiedTopology: true,
 	})
