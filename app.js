@@ -45,9 +45,8 @@ if (!dbURI) {
 	console.error('❌ Database URI is missing!');
 	process.exit(1); // Stop the server if no URI is provided
 }
-
 mongoose
-	.connect('mongodb+srv://omarhasan22:81195404OMAR@cluster0.1ufuyxn.mongodb.net/?retryWrites=true&w=majority&appName=library', {
+	.connect('mongodb+srv://omarhasan22:81195404OMAR@cluster0.1ufuyxn.mongodb.net/?retryWrites=true&w=majority', {
 		useNewUrlParser: true,
 		useUnifiedTopology: true,
 	})
