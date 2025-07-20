@@ -16,8 +16,6 @@ class BookService {
   }
 
   async createBook(bookData) {
-    console.log("bookData", bookData);
-
     // 1) resolve IDs
     const categoryId  = await this.resolveEntity(bookData.category,  Category,  'title');
     const subjectId  = await this.resolveEntity(bookData.subject,  Subject,  'title');
