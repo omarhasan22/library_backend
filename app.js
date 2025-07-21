@@ -4,7 +4,7 @@ const express = require('express');
 require('dotenv').config();
 const port = process.env.PORT || "8000";
 const usersRoute = require('./routes/index.js');
-const cors =  require('cors');
+const cors = require('cors');
 const swaggerUI = require('swagger-ui-express')
 const swaggerJSDoc = require('swagger-jsdoc')
 
@@ -37,7 +37,7 @@ app.use(express.json());
 
 const isProduction = process.env.NODE_ENV === 'production';
 // const dbURI = isProduction ? process.env.MONGO_URI_PROD : process.env.MONGO_URI_LOCAL;
-const dbURI = process.env.MONGO_URI_PROD ;
+const dbURI = process.env.MONGO_URI_PROD;
 console.log(`Using database URI: ${dbURI}`);
 console.log(process.env.MONGO_URI_PROD);
 
@@ -59,7 +59,7 @@ mongoose.Promise = global.Promise;
 app.use('/', usersRoute);
 
 app.listen(port, () => {
-   // console.log(`Listening to requests on http://localhost:${port}`);
-  });
+	// console.log(`Listening to requests on http://localhost:${port}`);
+});
 
 module.exports = app;

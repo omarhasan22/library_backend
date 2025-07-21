@@ -7,46 +7,46 @@ const Publisher = require('../models/publisher.model');
 
 
 class BookService {
- async resolveEntity(data, Model, field, filter = {}) {
+  async resolveEntity(data, Model, field, filter = {}) {
     if (!data || !data[field]) return null;
     const query = { [field]: data[field], ...filter };
-    let doc   = await Model.findOne(query);
+    let doc = await Model.findOne(query);
     if (!doc) doc = await new Model({ ...filter, [field]: data[field] }).save();
     return doc._id;
   }
 
   async createBook(bookData) {
     // 1) resolve IDs
-    const categoryId  = await this.resolveEntity(bookData.category,  Category,  'title');
-    const subjectId  = await this.resolveEntity(bookData.subject,  Subject,  'title');
+    const categoryId = await this.resolveEntity(bookData.category, Category, 'title');
+    const subjectId = await this.resolveEntity(bookData.subject, Subject, 'title');
     const publisherId = await this.resolveEntity(bookData.publisher, Publisher, 'title');
 
-    const authorId    = await this.resolveEntity(bookData.author,    Author, 'name', { type: 'author' });
-    const muhashiId   = await this.resolveEntity(bookData.muhashi,   Author, 'name', { type: 'muhashi' });
-    const editorId    = await this.resolveEntity(bookData.editor,    Author, 'name', { type: 'editor' });
+    const authorId = await this.resolveEntity(bookData.author, Author, 'name', { type: 'author' });
+    const muhashiId = await this.resolveEntity(bookData.muhashi, Author, 'name', { type: 'muhashi' });
+    const editorId = await this.resolveEntity(bookData.editor, Author, 'name', { type: 'editor' });
     const caretakerId = await this.resolveEntity(bookData.caretaker, Author, 'name', { type: 'caretaker' });
 
     // 2) build document
     const bookObj = {
-      title:           bookData.title,
-      author:          authorId,
-      muhashi:         muhashiId,
-      editor:          editorId,
-      caretaker:       caretakerId,
-      category:        categoryId,
-      publisher:       publisherId,
+      title: bookData.title,
+      author: authorId,
+      muhashi: muhashiId,
+      editor: editorId,
+      caretaker: caretakerId,
+      category: categoryId,
+      publisher: publisherId,
       numberOfVolumes: bookData.numberOfVolumes,
-      editionNumber:   bookData.editionNumber,
+      editionNumber: bookData.editionNumber,
       publicationYear: bookData.publicationYear,
-      subject:         subjectId,
-      pageCount:       bookData.pageCount,
+      subject: subjectId,
+      pageCount: bookData.pageCount,
       address: {
-        roomNumber:  bookData.address?.roomNumber,
+        roomNumber: bookData.address?.roomNumber,
         shelfNumber: bookData.address?.shelfNumber,
-        wallNumber:  bookData.address?.wallNumber,
-        bookNumber:  bookData.address?.bookNumber
+        wallNumber: bookData.address?.wallNumber,
+        bookNumber: bookData.address?.bookNumber
       },
-      imageUrl:        bookData.imagePath   // saved by controller
+      imageUrl: bookData.imagePath   // saved by controller
     };
 
     // 3) save
@@ -54,23 +54,38 @@ class BookService {
     return await book.save();
   }
 
-async getAllBooks(query = '') {
-  const searchCriteria = query 
-    ? { title: { $regex: query, $options: 'i' } } 
-    : {};
+  async getAllBooks(query = '') {
+    const searchCriteria = query
+      ? { title: { $regex: query, $options: 'i' } }
+      : {};
 
-  return await BookModel.find(searchCriteria).populate([
-    { path: 'category', select: 'title' },
-    { path: 'subject', select: 'title' },
-    { path: 'author', select: 'name type' },    // type helps if you want to show role
-    { path: 'editor', select: 'name type' },
-    { path: 'caretaker', select: 'name type' },
-    { path: 'publisher', select:'title' },
-  ]);
-}
+    return await BookModel.find(searchCriteria).populate([
+      { path: 'category', select: 'title' },
+      { path: 'subject', select: 'title' },
+      { path: 'author', select: 'name type' },    // type helps if you want to show role
+      { path: 'editor', select: 'name type' },
+      { path: 'caretaker', select: 'name type' },
+      { path: 'publisher', select: 'title' },
+    ]);
+  }
 
   async getBookById(id) {
-    return await BookModel.findById(id);
+    return await BookModel.findById(id).populate([
+      // { path: 'author' },
+      // { path: 'muhashi' },
+      // { path: 'editor' },
+      // { path: 'caretaker' },
+      // { path: 'category' },
+      // { path: 'subject' },
+      // { path: 'publisher' },
+
+      { path: 'category', select: 'title' },
+      { path: 'subject', select: 'title' },
+      { path: 'author', select: 'name type' },    // type helps if you want to show role
+      { path: 'editor', select: 'name type' },
+      { path: 'caretaker', select: 'name type' },
+      { path: 'publisher', select: 'title' },
+    ]);
   }
 
   async updateBook(id, bookData) {
