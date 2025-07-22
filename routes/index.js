@@ -3,7 +3,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const User = mongoose.model('User');
 const bcrypt = require('bcrypt');
-const upload  = require('../middlewares/multer');
+const upload = require('../middlewares/multer');
 
 const registrationCtrl = require('../controllers/registration.controller');
 const loginCtrl = require('../controllers/login.controller');
@@ -44,14 +44,14 @@ router.get('/users/:username', async (req, res) => {
 // router.get('/users/:userId', async (req, res) => {
 //  // try {
 //     console.log(123444448);
-    
+
 //     const _id  = req.params.userId;
 //     let users;
 //     console.log("_id");
-    
+
 //     users = await User.findOne({_id});
 //     console.log(users);
-  
+
 //     res.json(users);
 //   // } catch (err) {
 //   //   res.status(500).json({ error: err.message });
@@ -89,12 +89,12 @@ router.delete('/users/delete', async (req, res) => {
 // BOOK ROUTES
 router.post('/books',
   // isAuthenticate,
-   upload.single('image'),
-    bookController.createBook);
+  upload.single('image'),
+  bookController.createBook);
 router.get('/books', bookController.getAllBooks);
 router.get('/books/:id', bookController.getBookById);
-router.put('/books/:id', isAuthenticate, bookController.updateBook);
-router.delete('/books/:id', isAuthenticate, bookController.deleteBook);
+router.put('/books/:id', bookController.updateBook);
+router.delete('/books/:id', bookController.deleteBook);
 
 router.get('/categories', bookController.getCategories);
 router.get('/categories/:category-id', bookController.getCategoryById);
