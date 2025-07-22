@@ -55,18 +55,110 @@ class BookService {
   }
 
   async getAllBooks(query = '') {
-    const searchCriteria = query
-      ? { title: { $regex: query, $options: 'i' } }
-      : {};
+    const pipeline = [
+      // Lookup all related collections
+      {
+        $lookup: {
+          from: 'authors',
+          localField: 'author',
+          foreignField: '_id',
+          as: 'authorData'
+        }
+      },
+      {
+        $lookup: {
+          from: 'authors',
+          localField: 'muhashi',
+          foreignField: '_id',
+          as: 'muhashiData'
+        }
+      },
+      {
+        $lookup: {
+          from: 'authors',
+          localField: 'editor',
+          foreignField: '_id',
+          as: 'editorData'
+        }
+      },
+      {
+        $lookup: {
+          from: 'authors',
+          localField: 'caretaker',
+          foreignField: '_id',
+          as: 'caretakerData'
+        }
+      },
+      {
+        $lookup: {
+          from: 'publishers',
+          localField: 'publisher',
+          foreignField: '_id',
+          as: 'publisherData'
+        }
+      },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'category',
+          foreignField: '_id',
+          as: 'categoryData'
+        }
+      },
+      {
+        $lookup: {
+          from: 'subjects',
+          localField: 'subject',
+          foreignField: '_id',
+          as: 'subjectData'
+        }
+      }
+    ];
 
-    return await BookModel.find(searchCriteria).populate([
-      { path: 'category', select: 'title' },
-      { path: 'subject', select: 'title' },
-      { path: 'author', select: 'name type' },    // type helps if you want to show role
-      { path: 'editor', select: 'name type' },
-      { path: 'caretaker', select: 'name type' },
-      { path: 'publisher', select: 'title' },
-    ]);
+    // Add search stage if query provided
+    if (query) {
+      const searchStage = {
+        $match: {
+          $or: [
+            { title: { $regex: query, $options: 'i' } },
+            { 'address.roomNumber': { $regex: query, $options: 'i' } },
+            { 'address.wallNumber': { $regex: query, $options: 'i' } },
+            { 'address.shelfNumber': { $regex: query, $options: 'i' } },
+            { 'address.bookNumber': { $regex: query, $options: 'i' } },
+            { 'authorData.name': { $regex: query, $options: 'i' } },
+            { 'muhashiData.name': { $regex: query, $options: 'i' } },
+            { 'editorData.name': { $regex: query, $options: 'i' } },
+            { 'caretakerData.name': { $regex: query, $options: 'i' } },
+            { 'publisherData.title': { $regex: query, $options: 'i' } },
+            { 'categoryData.title': { $regex: query, $options: 'i' } },
+            { 'subjectData.title': { $regex: query, $options: 'i' } }
+          ]
+        }
+      };
+      pipeline.push(searchStage);
+    }
+
+    // Add projection stage to format the output
+    pipeline.push({
+      $project: {
+        title: 1,
+        numberOfVolumes: 1,
+        editionNumber: 1,
+        publicationYear: 1,
+        pageCount: 1,
+        address: 1,
+        imageUrl: 1,
+        author: { $arrayElemAt: ['$authorData', 0] },
+        muhashi: { $arrayElemAt: ['$muhashiData', 0] },
+        editor: { $arrayElemAt: ['$editorData', 0] },
+        caretaker: { $arrayElemAt: ['$caretakerData', 0] },
+        publisher: { $arrayElemAt: ['$publisherData', 0] },
+        category: { $arrayElemAt: ['$categoryData', 0] },
+        subject: { $arrayElemAt: ['$subjectData', 0] }
+      }
+    });
+
+    return await BookModel.aggregate(pipeline);
   }
 
   async getBookById(id) {
