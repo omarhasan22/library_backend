@@ -20,6 +20,7 @@ class BookService {
     const categoryId = await this.resolveEntity(bookData.category, Category, 'title');
     const subjectId = await this.resolveEntity(bookData.subject, Subject, 'title');
     const publisherId = await this.resolveEntity(bookData.publisher, Publisher, 'title');
+    const publisher2Id = await this.resolveEntity(bookData.publisher2, Publisher, 'title');
 
     const authorId = await this.resolveEntity(bookData.author, Author, 'name', { type: 'author' });
     const muhashiId = await this.resolveEntity(bookData.muhashi, Author, 'name', { type: 'muhashi' });
@@ -35,6 +36,7 @@ class BookService {
       caretaker: caretakerId,
       category: categoryId,
       publisher: publisherId,
+      publisher2: publisher2Id,
       numberOfVolumes: bookData.numberOfVolumes,
       editionNumber: bookData.editionNumber,
       publicationYear: bookData.publicationYear,
@@ -99,6 +101,14 @@ class BookService {
       },
       {
         $lookup: {
+          from: 'publishers',
+          localField: 'publisher2',
+          foreignField: '_id',
+          as: 'publisherData2'
+        }
+      },
+      {
+        $lookup: {
           from: 'categories',
           localField: 'category',
           foreignField: '_id',
@@ -153,6 +163,7 @@ class BookService {
         editor: { $arrayElemAt: ['$editorData', 0] },
         caretaker: { $arrayElemAt: ['$caretakerData', 0] },
         publisher: { $arrayElemAt: ['$publisherData', 0] },
+        publisher2: { $arrayElemAt: ['$publisherData2', 0] },
         category: { $arrayElemAt: ['$categoryData', 0] },
         subject: { $arrayElemAt: ['$subjectData', 0] }
       }

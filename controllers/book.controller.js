@@ -1,38 +1,36 @@
 // وحدة التحكم في الكتاب
 const { BookService } = require('../services/book.service');
-const path        = require('path');
+const path = require('path');
 
 class BookController {
 
-async createBook(req, res) {
-  try {
-    // copy incoming form‑fields
-    const bookData = { ...req.body };
+  async createBook(req, res) {
+    try {
+      // copy incoming form‑fields
+      const bookData = { ...req.body };
 
-    console.log("req.file ",req.file);
-    
-    // Attach image path
-    if (req.file) {
-      bookData.imagePath = `/uploads/books/${req.file}`;
+      // Attach image path
+      if (req.file) {
+        bookData.imagePath = `/uploads/books/${req.file}`;
+      }
+
+      const book = await BookService.createBook(bookData);
+      return res.status(201).json(book);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
     }
+  };
 
-    const book = await BookService.createBook(bookData);
-    return res.status(201).json(book);
-  } catch (err) {
-    return res.status(400).json({ error: err.message });
+  async getAllBooks(req, res) {
+    try {
+      const query = req.query.q || '';
+      const books = await BookService.getAllBooks(query);
+
+      res.status(200).json(books);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   }
-};
-
-async getAllBooks(req, res) {
-  try {
-    const query = req.query.q || '';
-    const books = await BookService.getAllBooks(query);
-
-    res.status(200).json(books);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-}
 
 
   async getBookById(req, res) {
@@ -66,7 +64,7 @@ async getAllBooks(req, res) {
   }
 
   async getCategories(req, res) {
-    try {      
+    try {
       // Assuming categories are stored in the book model
       const categories = await BookService.getCategories();
       console.log('Categories fetched:', categories);
@@ -77,7 +75,7 @@ async getAllBooks(req, res) {
   }
 
   async getsubjects(req, res) {
-    try {      
+    try {
       const subjects = await BookService.getsubjects();
       res.status(200).json(subjects);
     } catch (err) {
@@ -93,7 +91,7 @@ async getAllBooks(req, res) {
       res.status(500).json({ error: err.message });
     }
   }
-  
+
   async getCategoryById(req, res) {
     try {
       const category = await BookService.getCategoryById(req.params['category-id']);
@@ -107,7 +105,7 @@ async getAllBooks(req, res) {
   async getPeople(req, res) {
     try {
       console.log('Fetching all People');
-      
+
       // Assuming categories are stored in the book model
       const People = await BookService.getPeople();
       console.log('People fetched:', People);
