@@ -47,6 +47,12 @@ const BookSchema = new mongoose.Schema({
     ref: 'Publisher',
   },
 
+  // الدار
+  publisher2: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Publisher',
+  },
+
   // عدد الأجزاء
   numberOfVolumes: {
     type: Number,
@@ -79,12 +85,12 @@ const BookSchema = new mongoose.Schema({
   },
 
   address: {
-    roomNumber:  { type: String, trim: true },
+    roomNumber: { type: String, trim: true },
     shelfNumber: { type: String, trim: true },
-    wallNumber:  { type: String, trim: true },
-    bookNumber:  { type: String, trim: true }
+    wallNumber: { type: String, trim: true },
+    bookNumber: { type: String, trim: true }
   },
-  
+
   // مسار صورة الغلاف
   imageUrl: {
     type: String,
