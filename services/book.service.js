@@ -53,7 +53,9 @@ class BookService {
 
     // 3) save
     const book = new BookModel(bookObj);
-    return await book.save();
+    await book.save();
+    let bookAdded = this.getBookById(book._id)
+    return bookAdded
   }
 
   async getAllBooks(query = '') {
@@ -174,14 +176,6 @@ class BookService {
 
   async getBookById(id) {
     return await BookModel.findById(id).populate([
-      // { path: 'author' },
-      // { path: 'muhashi' },
-      // { path: 'editor' },
-      // { path: 'caretaker' },
-      // { path: 'category' },
-      // { path: 'subject' },
-      // { path: 'publisher' },
-
       { path: 'category', select: 'title' },
       { path: 'subject', select: 'title' },
       { path: 'author', select: 'name type' },    // type helps if you want to show role
