@@ -40,8 +40,7 @@ class BookService {
     const commentatorids = await this.resolveEntity(bookData.commentator, Author, 'name', { type: 'commentator' });
     const editorIds = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
     const caretakerIds = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
-
-    console.log("editorIds ", editorIds);
+    const muhashisIds = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
 
     // 2) build document
     const bookObj = {
@@ -50,6 +49,7 @@ class BookService {
       commentator: commentatorids,
       editors: editorIds,
       caretakers: caretakerIds,
+      muhashis: muhashisIds,
       category: categoryId,
       subject: subjectId,
       publishers: publisherIds,
@@ -63,7 +63,8 @@ class BookService {
         wallNumber: bookData.address?.wallNumber,
         bookNumber: bookData.address?.bookNumber
       },
-      imageUrl: bookData.imagePath || ''
+      imageUrl: bookData.imagePath || '',
+      notes: bookData.notes || ''
     };
 
     // 3) save
@@ -110,6 +111,14 @@ class BookService {
       },
       {
         $lookup: {
+          from: 'authors',
+          localField: 'muhashis',
+          foreignField: '_id',
+          as: 'muhashiData'
+        }
+      },
+      {
+        $lookup: {
           from: 'publishers',
           localField: 'publishers',
           foreignField: '_id',
@@ -150,7 +159,7 @@ class BookService {
             { 'caretakerData.name': { $regex: query, $options: 'i' } },
             { 'publisherData.title': { $regex: query, $options: 'i' } },
             { 'categoryData.title': { $regex: query, $options: 'i' } },
-            { 'subjectData.title': { $regex: query, $options: 'i' } }
+            { 'subjectData.title': { $regex: query, $options: 'i' } },
           ]
         }
       };
@@ -171,9 +180,11 @@ class BookService {
         commentator: '$commentatorData',
         editors: '$editorData',
         caretakers: '$caretakerData',
+        muhashis: '$muhashiData',
         publishers: '$publisherData',
         category: { $arrayElemAt: ['$categoryData', 0] },
         subject: { $arrayElemAt: ['$subjectData', 0] },
+        notes: 1,
       }
     });
 
@@ -184,9 +195,11 @@ class BookService {
     return await BookModel.findById(id).populate([
       { path: 'category', select: 'title' },
       { path: 'subject', select: 'title' },
-      { path: 'authors', select: 'name type' },    // type helps if you want to show role
+      { path: 'authors', select: 'name type' },
       { path: 'editors', select: 'name type' },
       { path: 'caretakers', select: 'name type' },
+      { path: 'commentators', select: 'name type' },
+      { path: 'muhashis', select: 'name type' },
       { path: 'publishers', select: 'title' },
     ]);
   }
@@ -195,7 +208,9 @@ class BookService {
     // if new imagePath provided, overwrite imageUrl
     const update = { ...bookData };
     if (bookData.imagePath) update.imageUrl = bookData.imagePath;
-    return BookModel.findByIdAndUpdate(id, update, { new: true });
+    let addedBook = await BookModel.findByIdAndUpdate(id, update, { new: true });
+    let book = await this.getBookById(addedBook._id);
+    return book;
   }
 
   async deleteBook(id) {
