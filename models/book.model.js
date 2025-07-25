@@ -33,6 +33,11 @@ const BookSchema = new mongoose.Schema({
     ref: 'Author'
   }],
 
+  muhashis: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Author'
+  }],
+
   // التصنيف - Single object reference
   category: {
     type: mongoose.Schema.Types.ObjectId,
@@ -86,6 +91,11 @@ const BookSchema = new mongoose.Schema({
 
   // مسار صورة الغلاف
   imageUrl: {
+    type: String,
+    trim: true
+  },
+
+  notes: {
     type: String,
     trim: true
   }
