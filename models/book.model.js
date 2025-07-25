@@ -9,49 +9,42 @@ const BookSchema = new mongoose.Schema({
     trim: true
   },
 
-  // المؤلف
-  author: {
+  // المؤلفون - Array to support multiple authors
+  authors: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Author',
-    required: true
-  },
+    ref: 'Author'
+  }],
 
-  // المحشي
-  muhashi: {
+  // الشارحون - Array to support multiple commentator
+  commentators: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Author',
-  },
+    ref: 'Author'
+  }],
 
-  // المحقق
-  editor: {
+  // المحققون - Array to support multiple editors
+  editors: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Author',
-  },
+    ref: 'Author'
+  }],
 
-  // اعتنى به
-  caretaker: {
+  // من اعتنى بهم - Array to support multiple caretakers
+  caretakers: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Author',
-  },
+    ref: 'Author'
+  }],
 
-  // التصنيف
+  // التصنيف - Single object reference
   category: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Category',
     required: true
   },
 
-  // الدار
-  publisher: {
+  // دور النشر - Array to support multiple publishers
+  publishers: [{
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Publisher',
-  },
-
-  // الدار
-  publisher2: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Publisher',
-  },
+    ref: 'Publisher'
+  }],
 
   // عدد الأجزاء
   numberOfVolumes: {
@@ -72,7 +65,7 @@ const BookSchema = new mongoose.Schema({
     min: 0
   },
 
-  // موضوع الكتاب
+  // موضوع الكتاب - Single object reference
   subject: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Subject'

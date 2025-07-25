@@ -8,39 +8,54 @@ const Publisher = require('../models/publisher.model');
 
 class BookService {
   async resolveEntity(data, Model, field, filter = {}) {
-    if (!data || !data[field]) return null;
-    const query = { [field]: data[field], ...filter };
-    let doc = await Model.findOne(query);
-    if (!doc) doc = await new Model({ ...filter, [field]: data[field] }).save();
-    return doc._id;
+    if (!data) return null;
+
+    const dataArray = Array.isArray(data) ? data : [data];
+    const ids = [];
+
+    for (const item of dataArray) {
+      // إذا كان يحتوي على _id موجود، نستخدمه مباشرة
+      if (item._id) {
+        ids.push(item._id);
+      } else if (item[field]) {
+        const query = { [field]: item[field], ...filter };
+        let doc = await Model.findOne(query);
+        if (!doc) {
+          doc = await new Model({ ...filter, [field]: item[field] }).save();
+        }
+        ids.push(doc._id);
+      }
+    }
+
+    // إذا كان الأصل قيمة مفردة، أرجع _id مفرد
+    return Array.isArray(data) ? ids : ids[0];
   }
 
   async createBook(bookData) {
     // 1) resolve IDs
     const categoryId = await this.resolveEntity(bookData.category, Category, 'title');
     const subjectId = await this.resolveEntity(bookData.subject, Subject, 'title');
-    const publisherId = await this.resolveEntity(bookData.publisher, Publisher, 'title');
-    const publisher2Id = await this.resolveEntity(bookData.publisher2, Publisher, 'title');
+    const publisherIds = await this.resolveEntity(bookData.publishers, Publisher, 'title');
+    const authorIds = await this.resolveEntity(bookData.authors, Author, 'name', { type: 'author' });
+    const commentatorids = await this.resolveEntity(bookData.commentator, Author, 'name', { type: 'commentator' });
+    const editorIds = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
+    const caretakerIds = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
 
-    const authorId = await this.resolveEntity(bookData.author, Author, 'name', { type: 'author' });
-    const muhashiId = await this.resolveEntity(bookData.muhashi, Author, 'name', { type: 'muhashi' });
-    const editorId = await this.resolveEntity(bookData.editor, Author, 'name', { type: 'editor' });
-    const caretakerId = await this.resolveEntity(bookData.caretaker, Author, 'name', { type: 'caretaker' });
+    console.log("editorIds ", editorIds);
 
     // 2) build document
     const bookObj = {
       title: bookData.title,
-      author: authorId,
-      muhashi: muhashiId,
-      editor: editorId,
-      caretaker: caretakerId,
+      authors: authorIds,
+      commentator: commentatorids,
+      editors: editorIds,
+      caretakers: caretakerIds,
       category: categoryId,
-      publisher: publisherId,
-      publisher2: publisher2Id,
+      subject: subjectId,
+      publishers: publisherIds,
       numberOfVolumes: bookData.numberOfVolumes,
       editionNumber: bookData.editionNumber,
       publicationYear: bookData.publicationYear,
-      subject: subjectId,
       pageCount: bookData.pageCount,
       address: {
         roomNumber: bookData.address?.roomNumber,
@@ -48,15 +63,15 @@ class BookService {
         wallNumber: bookData.address?.wallNumber,
         bookNumber: bookData.address?.bookNumber
       },
-      imageUrl: bookData.imagePath   // saved by controller
+      imageUrl: bookData.imagePath || ''
     };
 
     // 3) save
     const book = new BookModel(bookObj);
     await book.save();
-    let bookAdded = this.getBookById(book._id)
-    return bookAdded
+    return this.getBookById(book._id);
   }
+
 
   async getAllBooks(query = '') {
     const pipeline = [
@@ -64,7 +79,7 @@ class BookService {
       {
         $lookup: {
           from: 'authors',
-          localField: 'author',
+          localField: 'authors',
           foreignField: '_id',
           as: 'authorData'
         }
@@ -72,15 +87,15 @@ class BookService {
       {
         $lookup: {
           from: 'authors',
-          localField: 'muhashi',
+          localField: 'commentator',
           foreignField: '_id',
-          as: 'muhashiData'
+          as: 'commentatorData'
         }
       },
       {
         $lookup: {
           from: 'authors',
-          localField: 'editor',
+          localField: 'editors',
           foreignField: '_id',
           as: 'editorData'
         }
@@ -88,7 +103,7 @@ class BookService {
       {
         $lookup: {
           from: 'authors',
-          localField: 'caretaker',
+          localField: 'caretakers',
           foreignField: '_id',
           as: 'caretakerData'
         }
@@ -96,17 +111,9 @@ class BookService {
       {
         $lookup: {
           from: 'publishers',
-          localField: 'publisher',
+          localField: 'publishers',
           foreignField: '_id',
           as: 'publisherData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'publishers',
-          localField: 'publisher2',
-          foreignField: '_id',
-          as: 'publisherData2'
         }
       },
       {
@@ -138,7 +145,7 @@ class BookService {
             { 'address.shelfNumber': { $regex: query, $options: 'i' } },
             { 'address.bookNumber': { $regex: query, $options: 'i' } },
             { 'authorData.name': { $regex: query, $options: 'i' } },
-            { 'muhashiData.name': { $regex: query, $options: 'i' } },
+            { 'commentatorData.name': { $regex: query, $options: 'i' } },
             { 'editorData.name': { $regex: query, $options: 'i' } },
             { 'caretakerData.name': { $regex: query, $options: 'i' } },
             { 'publisherData.title': { $regex: query, $options: 'i' } },
@@ -160,14 +167,13 @@ class BookService {
         pageCount: 1,
         address: 1,
         imageUrl: 1,
-        author: { $arrayElemAt: ['$authorData', 0] },
-        muhashi: { $arrayElemAt: ['$muhashiData', 0] },
-        editor: { $arrayElemAt: ['$editorData', 0] },
-        caretaker: { $arrayElemAt: ['$caretakerData', 0] },
-        publisher: { $arrayElemAt: ['$publisherData', 0] },
-        publisher2: { $arrayElemAt: ['$publisherData2', 0] },
+        authors: '$authorData',
+        commentator: '$commentatorData',
+        editors: '$editorData',
+        caretakers: '$caretakerData',
+        publishers: '$publisherData',
         category: { $arrayElemAt: ['$categoryData', 0] },
-        subject: { $arrayElemAt: ['$subjectData', 0] }
+        subject: { $arrayElemAt: ['$subjectData', 0] },
       }
     });
 
@@ -178,10 +184,10 @@ class BookService {
     return await BookModel.findById(id).populate([
       { path: 'category', select: 'title' },
       { path: 'subject', select: 'title' },
-      { path: 'author', select: 'name type' },    // type helps if you want to show role
-      { path: 'editor', select: 'name type' },
-      { path: 'caretaker', select: 'name type' },
-      { path: 'publisher', select: 'title' },
+      { path: 'authors', select: 'name type' },    // type helps if you want to show role
+      { path: 'editors', select: 'name type' },
+      { path: 'caretakers', select: 'name type' },
+      { path: 'publishers', select: 'title' },
     ]);
   }
 

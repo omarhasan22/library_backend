@@ -21,7 +21,7 @@ const authorSchema = new mongoose.Schema({
   // Role type - النوع (مؤلف، محقق، معتني، ناشر)
   type: {
     type: String,
-    enum: ['author', 'editor', 'caretaker', 'publisher', 'muhashi'],
+    enum: ['author', 'editor', 'caretaker', 'publisher', 'commentator'],
     required: true
   }
 });
