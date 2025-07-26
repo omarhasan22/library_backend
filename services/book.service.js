@@ -37,7 +37,7 @@ class BookService {
     const subjectId = await this.resolveEntity(bookData.subject, Subject, 'title');
     const publisherIds = await this.resolveEntity(bookData.publishers, Publisher, 'title');
     const authorIds = await this.resolveEntity(bookData.authors, Author, 'name', { type: 'author' });
-    const commentatorids = await this.resolveEntity(bookData.commentator, Author, 'name', { type: 'commentator' });
+    const commentatorids = await this.resolveEntity(bookData.commentators, Author, 'name', { type: 'commentator' });
     const editorIds = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
     const caretakerIds = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
     const muhashisIds = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
@@ -46,7 +46,7 @@ class BookService {
     const bookObj = {
       title: bookData.title,
       authors: authorIds,
-      commentator: commentatorids,
+      commentators: commentatorids,
       editors: editorIds,
       caretakers: caretakerIds,
       muhashis: muhashisIds,
@@ -88,7 +88,7 @@ class BookService {
       {
         $lookup: {
           from: 'authors',
-          localField: 'commentator',
+          localField: 'commentators',
           foreignField: '_id',
           as: 'commentatorData'
         }
@@ -177,7 +177,7 @@ class BookService {
         address: 1,
         imageUrl: 1,
         authors: '$authorData',
-        commentator: '$commentatorData',
+        commentators: '$commentatorData',
         editors: '$editorData',
         caretakers: '$caretakerData',
         muhashis: '$muhashiData',
