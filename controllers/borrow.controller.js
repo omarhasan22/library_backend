@@ -5,8 +5,6 @@ class BorrowController {
     try {
       // Get user ID from authenticated request
       const userId = req.user._id;
-      console.log('User ID:', userId);
-      
 
       // Combine user id and book borrow data from body
       const borrowData = {
