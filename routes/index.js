@@ -41,23 +41,6 @@ router.get('/users/:username', async (req, res) => {
   }
 });
 
-// router.get('/users/:userId', async (req, res) => {
-//  // try {
-//     console.log(123444448);
-
-//     const _id  = req.params.userId;
-//     let users;
-//     console.log("_id");
-
-//     users = await User.findOne({_id});
-//     console.log(users);
-
-//     res.json(users);
-//   // } catch (err) {
-//   //   res.status(500).json({ error: err.message });
-//   // }
-// });
-
 router.get('/users/userId/:userId', loginCtrl.getUser);
 
 
@@ -88,7 +71,7 @@ router.delete('/users/delete', async (req, res) => {
 
 // BOOK ROUTES
 router.post('/books',
-  // isAuthenticate,
+  // isAuthenticate, // Uncomment if authentication is required for creating books
   upload.single('image'),
   bookController.createBook);
 router.get('/books', bookController.getAllBooks);
@@ -96,22 +79,28 @@ router.get('/books/:id', bookController.getBookById);
 router.put('/books/:id', bookController.updateBook);
 router.delete('/books/:id', bookController.deleteBook);
 
+// CATEGORY ROUTES
 router.get('/categories', bookController.getCategories);
 router.get('/categories/:category-id', bookController.getCategoryById);
+router.post('/categories', bookController.createCategory); // NEW ROUTE
 
+// SUBJECT ROUTES
 router.get('/subjects', bookController.getsubjects);
+router.post('/subjects', bookController.createSubject); // NEW ROUTE
+
+// PUBLISHER ROUTES
+router.get('/publishers', bookController.getPublishers);
+router.post('/publishers', bookController.createPublisher); // NEW ROUTE
+
+// PEOPLE ROUTES (for Authors, Commentators, etc.)
+router.get('/people', bookController.getPeople);
+router.post('/people', bookController.createPerson); // NEW ROUTE
 
 
 // BORROW ROUTES
 router.post('/borrows/borrow', isAuthenticate, BorrowController.borrowBook);
 router.put('/borrows/return/:id', isAuthenticate, BorrowController.returnBook);
 router.get('/borrows/borrowed', isAuthenticate, BorrowController.getBorrowedBooks);
-
-
-router.get('/people', bookController.getPeople);
-
-router.get('/publishers', bookController.getPublishers);
-
 
 
 module.exports = router;

@@ -33,6 +33,7 @@
     "mongoose": "^6.3.4",
     "multer": "^2.0.1",
     "path": "^0.12.7",
+    "sharp": "^0.34.3",
     "swagger-jsdoc": "^6.2.1",
     "swagger-ui-express": "^4.5.0",
     "tesseract.js": "^6.0.1"
