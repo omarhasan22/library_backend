@@ -61,13 +61,11 @@ const BookSchema = new mongoose.Schema({
   // رقم الطبعة
   editionNumber: {
     type: Number,
-    min: 1
   },
 
   // سنة الطباعة
   publicationYear: {
     type: Number,
-    min: 0
   },
 
   // موضوع الكتاب - Single object reference
