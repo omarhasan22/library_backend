@@ -118,7 +118,7 @@ class BookService {
     await book.save();
     return this.getBookById(book._id);
   }
-  async getAllBooks(searchOption = '', searchTerm = '') {
+  async getAllBooks(query = '', searchTerm = '') {
     // Lookup stages
     const lookupStages = [
       {
@@ -186,100 +186,98 @@ class BookService {
         }
       }
     ];
-
     const matchStage = [];
 
-    // Search logic
-    if (searchTerm.trim()) {
-      const specificFieldsMap = {
-        title: 'title',
+    if (query === 'advanced') {
+      let filters = [];
+      try {
+        filters = JSON.parse(searchTerm);
+      } catch {
+        filters = [];
+      }
+
+      const conditions = filters.map(({ field, value }) => {
+        const pathMap = {
+          category: 'categoryData.title',
+          subcategory: 'subjectData.title',
+          authors: 'authorData.name',
+          editors: 'editorData.name',
+          commentators: 'commentatorData.name',
+          caretakers: 'caretakerData.name',
+          muhashis: 'muhashiData.name',
+          publishers: 'publisherData.title',
+          roomNumber: 'address.roomNumber',
+          shelfNumber: 'address.shelfNumber',
+          wallNumber: 'address.wallNumber',
+          bookNumber: 'address.bookNumber'
+        };
+
+        const path = pathMap[field] || field;
+
+        return {
+          [path]: { $regex: value, $options: 'i' }
+        };
+      });
+
+      if (conditions.length) {
+        matchStage.push({ $match: { $and: conditions } });
+      }
+
+    } else if (searchTerm.trim()) {
+      const pathMap = {
+        category: 'categoryData.title',
+        subcategory: 'subjectData.title',
         authors: 'authorData.name',
-        commentators: 'commentatorData.name',
         editors: 'editorData.name',
+        commentators: 'commentatorData.name',
         caretakers: 'caretakerData.name',
         muhashis: 'muhashiData.name',
         publishers: 'publisherData.title',
-        category: 'categoryData.title',
-        subcategory: 'subjectData.title',
         roomNumber: 'address.roomNumber',
         shelfNumber: 'address.shelfNumber',
         wallNumber: 'address.wallNumber',
         bookNumber: 'address.bookNumber'
       };
 
-      const numericFields = ['numberOfVolumes', 'editionNumber', 'publicationYear'];
+      const path = pathMap[query] || query;
 
-      if (specificFieldsMap[searchOption]) {
-        matchStage.push({
-          [specificFieldsMap[searchOption]]: {
-            $regex: searchTerm,
-            $options: 'i'
-          }
-        });
-      } else if (numericFields.includes(searchOption)) {
-        matchStage.push({
-          $expr: {
-            $regexMatch: {
-              input: { $toString: `$${searchOption}` },
-              regex: searchTerm,
-              options: 'i'
-            }
-          }
-        });
-      } else {
-        matchStage.push({
-          $or: [
-            { title: { $regex: searchTerm, $options: 'i' } },
-            { 'address.roomNumber': { $regex: searchTerm, $options: 'i' } },
-            { 'address.wallNumber': { $regex: searchTerm, $options: 'i' } },
-            { 'address.shelfNumber': { $regex: searchTerm, $options: 'i' } },
-            { 'address.bookNumber': { $regex: searchTerm, $options: 'i' } },
-            { 'authorData.name': { $regex: searchTerm, $options: 'i' } },
-            { 'commentatorData.name': { $regex: searchTerm, $options: 'i' } },
-            { 'editorData.name': { $regex: searchTerm, $options: 'i' } },
-            { 'caretakerData.name': { $regex: searchTerm, $options: 'i' } },
-            { 'muhashiData.name': { $regex: searchTerm, $options: 'i' } },
-            { 'publisherData.title': { $regex: searchTerm, $options: 'i' } },
-            { 'categoryData.title': { $regex: searchTerm, $options: 'i' } },
-            { 'subjectData.title': { $regex: searchTerm, $options: 'i' } },
-            { $expr: { $regexMatch: { input: { $toString: "$numberOfVolumes" }, regex: searchTerm, options: 'i' } } },
-            { $expr: { $regexMatch: { input: { $toString: "$editionNumber" }, regex: searchTerm, options: 'i' } } },
-            { $expr: { $regexMatch: { input: { $toString: "$publicationYear" }, regex: searchTerm, options: 'i' } } }
-          ]
-        });
-      }
+      matchStage.push({
+        $match: {
+          [path]: { $regex: searchTerm, $options: 'i' }
+        }
+      });
     }
 
-    // Final pipeline for books
-    const booksPipeline = [
-      ...lookupStages,
-      ...(matchStage.length > 0 ? [{ $match: matchStage.length === 1 ? matchStage[0] : { $and: matchStage } }] : []),
-      {
-        $project: {
-          title: 1,
-          numberOfVolumes: 1,
-          editionNumber: 1,
-          publicationYear: 1,
-          pageCount: 1,
-          address: 1,
-          imageUrl: 1,
-          authors: '$authorData',
-          commentators: '$commentatorData',
-          editors: '$editorData',
-          caretakers: '$caretakerData',
-          muhashis: '$muhashiData',
-          publishers: '$publisherData',
-          category: { $arrayElemAt: ['$categoryData', 0] },
-          subject: { $arrayElemAt: ['$subjectData', 0] },
-          notes: 1,
-        }
+    const projectStage = {
+      $project: {
+        title: 1,
+        numberOfVolumes: 1,
+        editionNumber: 1,
+        publicationYear: 1,
+        pageCount: 1,
+        address: 1,
+        imageUrl: 1,
+        authors: '$authorData',
+        commentators: '$commentatorData',
+        editors: '$editorData',
+        caretakers: '$caretakerData',
+        muhashis: '$muhashiData',
+        publishers: '$publisherData',
+        category: { $arrayElemAt: ['$categoryData', 0] },
+        subject: { $arrayElemAt: ['$subjectData', 0] },
+        notes: 1,
       }
+    };
+
+    const pipeline = [
+      ...lookupStages,
+      ...matchStage,
+      projectStage
     ];
 
-    // Pipeline for counts
     const countsPipeline = [
       ...lookupStages,
-      ...(matchStage.length > 0 ? [{ $match: matchStage.length === 1 ? matchStage[0] : { $and: matchStage } }] : []),
+      ...matchStage,
       {
         $facet: {
           totalBooks: [{ $count: 'count' }],
@@ -305,7 +303,7 @@ class BookService {
     ];
 
     const [books, [counts]] = await Promise.all([
-      BookModel.aggregate(booksPipeline),
+      BookModel.aggregate(pipeline),
       BookModel.aggregate(countsPipeline)
     ]);
 
@@ -316,8 +314,6 @@ class BookService {
       uniquePublishers: counts?.uniquePublishers || 0
     };
   }
-
-
 
   async getBookById(id) {
     return await BookModel.findById(id).populate([
