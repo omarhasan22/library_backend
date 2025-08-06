@@ -71,15 +71,15 @@ class BookController {
 
   async getAllBooks(req, res) {
     try {
-      const query = req.query.q || '';
-      const books = await BookService.getAllBooks(query);
+      const searchOption = req.query.q || '';
+      const searchTerm = req.query.searchTerm || '';
 
+      const books = await BookService.getAllBooks(searchOption, searchTerm);
       res.status(200).json(books);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   }
-
 
   async getBookById(req, res) {
     try {
