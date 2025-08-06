@@ -119,7 +119,8 @@ class BookService {
     return this.getBookById(book._id);
   }
   async getAllBooks(searchOption = '', searchTerm = '') {
-    const pipeline = [
+    // Lookup stages
+    const lookupStages = [
       {
         $lookup: {
           from: 'authors',
@@ -186,6 +187,9 @@ class BookService {
       }
     ];
 
+    const matchStage = [];
+
+    // Search logic
     if (searchTerm.trim()) {
       const specificFieldsMap = {
         title: 'title',
@@ -206,76 +210,113 @@ class BookService {
       const numericFields = ['numberOfVolumes', 'editionNumber', 'publicationYear'];
 
       if (specificFieldsMap[searchOption]) {
-        pipeline.push({
-          $match: {
-            [specificFieldsMap[searchOption]]: {
-              $regex: searchTerm,
-              $options: 'i'
-            }
+        matchStage.push({
+          [specificFieldsMap[searchOption]]: {
+            $regex: searchTerm,
+            $options: 'i'
           }
         });
       } else if (numericFields.includes(searchOption)) {
-        pipeline.push({
-          $match: {
-            $expr: {
-              $regexMatch: {
-                input: { $toString: `$${searchOption}` },
-                regex: searchTerm,
-                options: 'i'
-              }
+        matchStage.push({
+          $expr: {
+            $regexMatch: {
+              input: { $toString: `$${searchOption}` },
+              regex: searchTerm,
+              options: 'i'
             }
           }
         });
       } else {
-        // General search across all fields
-        pipeline.push({
-          $match: {
-            $or: [
-              { title: { $regex: searchTerm, $options: 'i' } },
-              { 'address.roomNumber': { $regex: searchTerm, $options: 'i' } },
-              { 'address.wallNumber': { $regex: searchTerm, $options: 'i' } },
-              { 'address.shelfNumber': { $regex: searchTerm, $options: 'i' } },
-              { 'address.bookNumber': { $regex: searchTerm, $options: 'i' } },
-              { 'authorData.name': { $regex: searchTerm, $options: 'i' } },
-              { 'commentatorData.name': { $regex: searchTerm, $options: 'i' } },
-              { 'editorData.name': { $regex: searchTerm, $options: 'i' } },
-              { 'caretakerData.name': { $regex: searchTerm, $options: 'i' } },
-              { 'muhashiData.name': { $regex: searchTerm, $options: 'i' } },
-              { 'publisherData.title': { $regex: searchTerm, $options: 'i' } },
-              { 'categoryData.title': { $regex: searchTerm, $options: 'i' } },
-              { 'subjectData.title': { $regex: searchTerm, $options: 'i' } },
-              { $expr: { $regexMatch: { input: { $toString: "$numberOfVolumes" }, regex: searchTerm, options: 'i' } } },
-              { $expr: { $regexMatch: { input: { $toString: "$editionNumber" }, regex: searchTerm, options: 'i' } } },
-              { $expr: { $regexMatch: { input: { $toString: "$publicationYear" }, regex: searchTerm, options: 'i' } } }
-            ]
-          }
+        matchStage.push({
+          $or: [
+            { title: { $regex: searchTerm, $options: 'i' } },
+            { 'address.roomNumber': { $regex: searchTerm, $options: 'i' } },
+            { 'address.wallNumber': { $regex: searchTerm, $options: 'i' } },
+            { 'address.shelfNumber': { $regex: searchTerm, $options: 'i' } },
+            { 'address.bookNumber': { $regex: searchTerm, $options: 'i' } },
+            { 'authorData.name': { $regex: searchTerm, $options: 'i' } },
+            { 'commentatorData.name': { $regex: searchTerm, $options: 'i' } },
+            { 'editorData.name': { $regex: searchTerm, $options: 'i' } },
+            { 'caretakerData.name': { $regex: searchTerm, $options: 'i' } },
+            { 'muhashiData.name': { $regex: searchTerm, $options: 'i' } },
+            { 'publisherData.title': { $regex: searchTerm, $options: 'i' } },
+            { 'categoryData.title': { $regex: searchTerm, $options: 'i' } },
+            { 'subjectData.title': { $regex: searchTerm, $options: 'i' } },
+            { $expr: { $regexMatch: { input: { $toString: "$numberOfVolumes" }, regex: searchTerm, options: 'i' } } },
+            { $expr: { $regexMatch: { input: { $toString: "$editionNumber" }, regex: searchTerm, options: 'i' } } },
+            { $expr: { $regexMatch: { input: { $toString: "$publicationYear" }, regex: searchTerm, options: 'i' } } }
+          ]
         });
       }
     }
 
-    pipeline.push({
-      $project: {
-        title: 1,
-        numberOfVolumes: 1,
-        editionNumber: 1,
-        publicationYear: 1,
-        pageCount: 1,
-        address: 1,
-        imageUrl: 1,
-        authors: '$authorData',
-        commentators: '$commentatorData',
-        editors: '$editorData',
-        caretakers: '$caretakerData',
-        muhashis: '$muhashiData',
-        publishers: '$publisherData',
-        category: { $arrayElemAt: ['$categoryData', 0] },
-        subject: { $arrayElemAt: ['$subjectData', 0] },
-        notes: 1,
+    // Final pipeline for books
+    const booksPipeline = [
+      ...lookupStages,
+      ...(matchStage.length > 0 ? [{ $match: matchStage.length === 1 ? matchStage[0] : { $and: matchStage } }] : []),
+      {
+        $project: {
+          title: 1,
+          numberOfVolumes: 1,
+          editionNumber: 1,
+          publicationYear: 1,
+          pageCount: 1,
+          address: 1,
+          imageUrl: 1,
+          authors: '$authorData',
+          commentators: '$commentatorData',
+          editors: '$editorData',
+          caretakers: '$caretakerData',
+          muhashis: '$muhashiData',
+          publishers: '$publisherData',
+          category: { $arrayElemAt: ['$categoryData', 0] },
+          subject: { $arrayElemAt: ['$subjectData', 0] },
+          notes: 1,
+        }
       }
-    });
+    ];
 
-    return await BookModel.aggregate(pipeline);
+    // Pipeline for counts
+    const countsPipeline = [
+      ...lookupStages,
+      ...(matchStage.length > 0 ? [{ $match: matchStage.length === 1 ? matchStage[0] : { $and: matchStage } }] : []),
+      {
+        $facet: {
+          totalBooks: [{ $count: 'count' }],
+          uniqueAuthors: [
+            { $unwind: '$authors' },
+            { $group: { _id: '$authors' } },
+            { $count: 'count' }
+          ],
+          uniquePublishers: [
+            { $unwind: '$publishers' },
+            { $group: { _id: '$publishers' } },
+            { $count: 'count' }
+          ]
+        }
+      },
+      {
+        $project: {
+          totalBooks: { $ifNull: [{ $arrayElemAt: ['$totalBooks.count', 0] }, 0] },
+          uniqueAuthors: { $ifNull: [{ $arrayElemAt: ['$uniqueAuthors.count', 0] }, 0] },
+          uniquePublishers: { $ifNull: [{ $arrayElemAt: ['$uniquePublishers.count', 0] }, 0] }
+        }
+      }
+    ];
+
+    const [books, [counts]] = await Promise.all([
+      BookModel.aggregate(booksPipeline),
+      BookModel.aggregate(countsPipeline)
+    ]);
+
+    return {
+      books,
+      totalBooks: counts?.totalBooks || 0,
+      uniqueAuthors: counts?.uniqueAuthors || 0,
+      uniquePublishers: counts?.uniquePublishers || 0
+    };
   }
+
 
 
   async getBookById(id) {
