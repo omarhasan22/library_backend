@@ -58,6 +58,13 @@ const BookSchema = new mongoose.Schema({
     min: 1
   },
 
+  // عدد المجلدات
+  numberOfFolders: {
+    type: Number,
+    default: 1,
+    min: 1
+  },
+
   // رقم الطبعة
   editionNumber: {
     type: Number,

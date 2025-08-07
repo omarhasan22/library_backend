@@ -100,6 +100,7 @@ class BookService {
       subject: subjectId,
       publishers: publisherIds,
       numberOfVolumes: bookData.numberOfVolumes,
+      numberOfFolders: bookData.numberOfFolders,
       editionNumber: bookData.editionNumber,
       publicationYear: bookData.publicationYear,
       pageCount: pageCountValue, // Use the parsed/validated value
@@ -252,6 +253,7 @@ class BookService {
       $project: {
         title: 1,
         numberOfVolumes: 1,
+        numberOfFolders: 1,
         editionNumber: 1,
         publicationYear: 1,
         pageCount: 1,
