@@ -70,10 +70,9 @@ router.delete('/users/delete', async (req, res) => {
 
 
 // BOOK ROUTES
-router.post('/books',
-  // isAuthenticate, // Uncomment if authentication is required for creating books
-  upload.single('image'),
-  bookController.createBook);
+// remove multer for JSON creation
+router.post('/books', bookController.createBook);
+
 router.get('/books', bookController.getAllBooks);
 router.get('/books/:id', bookController.getBookById);
 router.put('/books/:id', bookController.updateBook);
