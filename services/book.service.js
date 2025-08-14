@@ -88,6 +88,8 @@ class BookService {
       console.warn(`Invalid pageCount received: ${bookData.pageCount}. Defaulting to ${pageCountValue}.`);
     }
 
+    console.log("Creating book with data:", bookData);
+
     // 2) build document
     const bookObj = {
       title: bookData.title,
@@ -113,6 +115,7 @@ class BookService {
       imageUrl: bookData.imagePath || '',
       notes: bookData.notes || ''
     };
+    console.log("Creating book with data:", bookObj);
 
     // 3) save
     const book = new BookModel(bookObj);
@@ -200,7 +203,7 @@ class BookService {
       const conditions = filters.map(({ field, value }) => {
         const pathMap = {
           category: 'categoryData.title',
-          subcategory: 'subjectData.title',
+          subject: 'subjectData.title',
           authors: 'authorData.name',
           editors: 'editorData.name',
           commentators: 'commentatorData.name',

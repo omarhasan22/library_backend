@@ -40,8 +40,6 @@ app.use(express.json());
 const isProduction = process.env.NODE_ENV === 'production';
 // const dbURI = isProduction ? process.env.MONGO_URI_PROD : process.env.MONGO_URI_LOCAL;
 const dbURI = process.env.MONGO_URI_PROD;
-console.log(`Using database URI: ${dbURI}`);
-console.log(process.env.MONGO_URI_PROD);
 
 if (!dbURI) {
 	console.error('❌ Database URI is missing!');
