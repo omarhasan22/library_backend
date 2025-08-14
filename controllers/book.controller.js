@@ -7,20 +7,22 @@ const sharp = require('sharp'); // For image processing
 class BookController {
 
   async createBook(req, res) {
+    console.log("Received book data:", req.body);
+
     try {
       const bookData = { ...req.body };
 
-      // FIX: Parse the address string into a JSON object
-      if (typeof bookData.address === 'string' && bookData.address.trim() !== '') {
-        try {
-          bookData.address = JSON.parse(bookData.address);
-        } catch (e) {
-          console.error("Failed to parse address JSON string:", e);
-          return res.status(400).json({ error: 'Invalid address format. Must be a valid JSON string.' });
-        }
-      } else {
-        bookData.address = {}; // Ensure address is an object even if empty or not provided
-      }
+      // // FIX: Parse the address string into a JSON object
+      // if (typeof bookData.address === 'string' && bookData.address.trim() !== '') {
+      //   try {
+      //     bookData.address = JSON.parse(bookData.address);
+      //   } catch (e) {
+      //     console.error("Failed to parse address JSON string:", e);
+      //     return res.status(400).json({ error: 'Invalid address format. Must be a valid JSON string.' });
+      //   }
+      // } else {
+      //   bookData.address = {}; // Ensure address is an object even if empty or not provided
+      // }
 
       // Image processing logic
       let processedImagePath = '';
@@ -171,7 +173,6 @@ class BookController {
   async getCategories(req, res) {
     try {
       const categories = await BookService.getCategories();
-      console.log('Categories fetched:', categories);
       res.status(200).json(categories);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -253,9 +254,7 @@ class BookController {
   // Existing getPeople
   async getPeople(req, res) {
     try {
-      console.log('Fetching all People');
       const People = await BookService.getPeople();
-      console.log('People fetched:', People);
       res.status(200).json(People);
     } catch (err) {
       res.status(500).json({ error: err.message });
