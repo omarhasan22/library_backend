@@ -8,6 +8,11 @@ const authorSchema = new mongoose.Schema({
     trim: true
   },
 
+  normalizedName: {
+    type: String,
+    required: true,
+    trim: true
+  },
   // Date of birth - تاريخ الميلاد
   dateOfBirth: {
     type: Date

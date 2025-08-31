@@ -5,24 +5,31 @@ const Subject = require('../models/subject.model');
 const Author = require('../models/author.model'); // This is your 'Person' model for authors, commentators, etc.
 const Publisher = require('../models/publisher.model');
 
-
 class BookService {
-  /**
-   * Resolves an entity's ID. If the data contains an _id, it's used.
-   * If the data is a plain string, it's treated as an _id.
-   * Otherwise, it tries to find the entity by 'field' (e.g., 'title', 'name').
-   * If not found, a new entity is created.
-   * Handles both single items and arrays of items.
-   * @param {Object|Array|string} data - The incoming data for the entity(ies). Can be an object with _id or a specific field, a plain ID string, or an array of such.
-   * @param {mongoose.Model} Model - The Mongoose model for the entity (e.g., Category, Subject, Author).
-   * @param {string} field - The field to use for finding/creating the entity (e.g., 'title' for Category, 'name' for Author).
-   * @param {Object} filter - Additional filter criteria for finding/creating (e.g., { type: 'author' } for Author).
-   * @returns {string|Array<string>|null} The resolved _id(s) or null if data is empty.
-   */
+
+  // Add this at the top of your BookService file
+  normalizeArabicText = (text) => {
+    if (!text) return '';
+    console.log("text ", text);
+
+    return text
+      .replace(/[\u064B-\u0652\u0670\u0640]/g, '')
+      .replace(/[\u0622\u0623\u0625\u0627]/g, 'ا')
+      .replace(/\u0649/g, 'ي')
+      .replace(/\u0629/g, 'ه')
+      .replace(/[\u0654\u0655]/g, '')
+      .replace(/\u0624/g, 'و')
+      .replace(/\u0626/g, 'ي')
+      .replace(/\u0621/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+  };
+
+  // Updated resolveEntity method
   async resolveEntity(data, Model, field, filter = {}) {
     if (!data) return null;
 
-    // Normalize data to an array for consistent processing
     let dataArray;
     let isOriginalInputArray = Array.isArray(data);
 
@@ -34,10 +41,14 @@ class BookService {
 
     const ids = [];
 
+    // Determine the normalized field name
+    const normalizedField = field === 'title' ? 'normalizedTitle' :
+      field === 'name' ? 'normalizedName' : null;
+
     for (const item of dataArray) {
       // If item is a string that looks like an ObjectId, use it directly
       if (typeof item === 'string' && mongoose.Types.ObjectId.isValid(item.replace(/"/g, ''))) {
-        ids.push(item.replace(/"/g, '')); // Strip quotes just in case
+        ids.push(item.replace(/"/g, ''));
       }
       // If item is an object with an _id, use it directly
       else if (typeof item === 'object' && item !== null && item._id && mongoose.Types.ObjectId.isValid(item._id)) {
@@ -45,20 +56,43 @@ class BookService {
       }
       // If item is an object with the specified field, try to find/create
       else if (typeof item === 'object' && item !== null && item[field]) {
-        const query = { [field]: item[field], ...filter };
+        let query;
+        if (normalizedField) {
+          const normalizedValue = this.normalizeArabicText(item[field]);
+          query = { [normalizedField]: normalizedValue, ...filter };
+        } else {
+          query = { [field]: item[field], ...filter };
+        }
+
         let doc = await Model.findOne(query);
         if (!doc) {
-          doc = await new Model({ ...filter, [field]: item[field] }).save();
+          const newDoc = { ...filter, [field]: item[field] };
+          if (normalizedField) {
+            newDoc[normalizedField] = this.normalizeArabicText(item[field]);
+          }
+          doc = await new Model(newDoc).save();
         }
         ids.push(doc._id);
       }
       // Fallback: If it's a string but not a valid ObjectId, assume it's a name/title
-      // This is crucial for handling new names/titles passed as strings.
       else if (typeof item === 'string' && !mongoose.Types.ObjectId.isValid(item.replace(/"/g, ''))) {
-        const query = { [field]: item.replace(/"/g, ''), ...filter }; // Strip quotes
+        const cleanValue = item.replace(/"/g, '');
+
+        let query;
+        if (normalizedField) {
+          const normalizedValue = this.normalizeArabicText(cleanValue);
+          query = { [normalizedField]: normalizedValue, ...filter };
+        } else {
+          query = { [field]: cleanValue, ...filter };
+        }
+
         let doc = await Model.findOne(query);
         if (!doc) {
-          doc = await new Model({ ...filter, [field]: item.replace(/"/g, '') }).save();
+          const newDoc = { ...filter, [field]: cleanValue };
+          if (normalizedField) {
+            newDoc[normalizedField] = this.normalizeArabicText(cleanValue);
+          }
+          doc = await new Model(newDoc).save();
         }
         ids.push(doc._id);
       }
@@ -68,7 +102,7 @@ class BookService {
   }
 
   async createBook(bookData) {
-    // 1) resolve IDs for all associated entities based on the incoming payload
+    // All existing resolveEntity calls remain the same
     const categoryId = await this.resolveEntity(bookData.category, Category, 'title');
     const subjectId = await this.resolveEntity(bookData.subject, Subject, 'title');
     const publisherIds = await this.resolveEntity(bookData.publishers, Publisher, 'title');
@@ -78,21 +112,14 @@ class BookService {
     const caretakerIds = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
     const muhashisIds = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
 
-    // FIX: Validate and parse pageCount
     let pageCountValue = parseInt(bookData.pageCount, 10);
     if (isNaN(pageCountValue) || pageCountValue < 0) {
-      // If it's "100+", "invalid", or negative, default to a sensible value like 0 or 1,
-      // or throw an error if you want strict validation.
-      // For now, let's default to 0 if invalid or 1 if it means "at least 1"
-      pageCountValue = 0; // Or 1, depending on your desired default for invalid input
+      pageCountValue = 0;
       console.warn(`Invalid pageCount received: ${bookData.pageCount}. Defaulting to ${pageCountValue}.`);
     }
-
-    console.log("Creating book with data:", bookData);
-
-    // 2) build document
     const bookObj = {
       title: bookData.title,
+      normalizedTitle: this.normalizeArabicText(bookData.title), // ADD THIS LINE
       authors: authorIds,
       commentators: commentatorids,
       editors: editorIds,
@@ -105,7 +132,7 @@ class BookService {
       numberOfFolders: bookData.numberOfFolders,
       editionNumber: bookData.editionNumber,
       publicationYear: bookData.publicationYear,
-      pageCount: pageCountValue, // Use the parsed/validated value
+      pageCount: pageCountValue,
       address: {
         roomNumber: bookData.address?.roomNumber,
         shelfNumber: bookData.address?.shelfNumber,
@@ -115,13 +142,67 @@ class BookService {
       imageUrl: bookData.imagePath || '',
       notes: bookData.notes || ''
     };
-    console.log("Creating book with data:", bookObj);
 
-    // 3) save
     const book = new BookModel(bookObj);
     await book.save();
     return this.getBookById(book._id);
   }
+
+  // Updated updateBook method - add normalizedTitle when title is updated
+  async updateBook(id, bookData) {
+    const updatePayload = { ...bookData };
+
+    // ADD THIS: If title is being updated, also update normalizedTitle
+    if (bookData.title) {
+      updatePayload.normalizedTitle = this.normalizeArabicText(bookData.title);
+    }
+
+    if (bookData.imagePath) {
+      updatePayload.imageUrl = bookData.imagePath;
+    } else {
+      delete updatePayload.imagePath;
+    }
+
+    if (updatePayload.pageCount !== undefined) {
+      let pageCountValue = parseInt(updatePayload.pageCount, 10);
+      if (isNaN(pageCountValue) || pageCountValue < 0) {
+        pageCountValue = 0;
+        console.warn(`Invalid pageCount received during update: ${updatePayload.pageCount}. Defaulting to ${pageCountValue}.`);
+      }
+      updatePayload.pageCount = pageCountValue;
+    }
+
+    // All existing resolveEntity calls remain the same
+    if (bookData.category) {
+      updatePayload.category = await this.resolveEntity(bookData.category, Category, 'title');
+    }
+    if (bookData.subject) {
+      updatePayload.subject = await this.resolveEntity(bookData.subject, Subject, 'title');
+    }
+    if (bookData.publishers) {
+      updatePayload.publishers = await this.resolveEntity(bookData.publishers, Publisher, 'title');
+    }
+    if (bookData.authors) {
+      updatePayload.authors = await this.resolveEntity(bookData.authors, Author, 'name', { type: 'author' });
+    }
+    if (bookData.commentators) {
+      updatePayload.commentators = await this.resolveEntity(bookData.commentators, Author, 'name', { type: 'commentator' });
+    }
+    if (bookData.editors) {
+      updatePayload.editors = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
+    }
+    if (bookData.caretakers) {
+      updatePayload.caretakers = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
+    }
+    if (bookData.muhashis) {
+      updatePayload.muhashis = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
+    }
+
+    let updatedBook = await BookModel.findByIdAndUpdate(id, updatePayload, { new: true });
+    let book = await this.getBookById(updatedBook._id);
+    return book;
+  }
+
   async getAllBooks(query = '', searchTerm = '') {
     // Lookup stages
     const lookupStages = [
@@ -190,6 +271,7 @@ class BookService {
         }
       }
     ];
+
     const matchStage = [];
 
     if (query === 'advanced') {
@@ -201,26 +283,52 @@ class BookService {
       }
 
       const conditions = filters.map(({ field, value }) => {
+        // Normalize the search value
+        const normalizedValue = this.normalizeArabicText(value);
+
+        // Map fields to their paths and determine if they should use normalized fields
         const pathMap = {
-          category: 'categoryData.title',
-          subject: 'subjectData.title',
-          authors: 'authorData.name',
-          editors: 'editorData.name',
-          commentators: 'commentatorData.name',
-          caretakers: 'caretakerData.name',
-          muhashis: 'muhashiData.name',
-          publishers: 'publisherData.title',
-          roomNumber: 'address.roomNumber',
-          shelfNumber: 'address.shelfNumber',
-          wallNumber: 'address.wallNumber',
-          bookNumber: 'address.bookNumber'
+          // For title fields, use normalized versions
+          title: { path: 'normalizedTitle', useNormalized: true },
+          category: { path: 'categoryData.normalizedTitle', useNormalized: true },
+          subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
+          publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
+
+          // For name fields, use normalized versions
+          authors: { path: 'authorData.normalizedName', useNormalized: true },
+          editors: { path: 'editorData.normalizedName', useNormalized: true },
+          commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
+          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
+          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
+
+          // Address fields don't need normalization
+          roomNumber: { path: 'address.roomNumber', useNormalized: false },
+          shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
+          wallNumber: { path: 'address.wallNumber', useNormalized: false },
+          bookNumber: { path: 'address.bookNumber', useNormalized: false },
+
+          // Other fields
+          numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
+          numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
+          editionNumber: { path: 'editionNumber', useNormalized: false },
+          publicationYear: { path: 'publicationYear', useNormalized: false },
+          pageCount: { path: 'pageCount', useNormalized: false },
+          notes: { path: 'notes', useNormalized: false }
         };
 
-        const path = pathMap[field] || field;
+        const fieldConfig = pathMap[field] || { path: field, useNormalized: false };
 
-        return {
-          [path]: { $regex: value, $options: 'i' }
-        };
+        if (fieldConfig.useNormalized) {
+          // For normalized fields, use exact match with normalized value
+          return {
+            [fieldConfig.path]: normalizedValue
+          };
+        } else {
+          // For non-normalized fields, use regex as before
+          return {
+            [fieldConfig.path]: { $regex: value, $options: 'i' }
+          };
+        }
       });
 
       if (conditions.length) {
@@ -228,33 +336,56 @@ class BookService {
       }
 
     } else if (searchTerm.trim()) {
+      // Normalize the search term
+      const normalizedSearchTerm = this.normalizeArabicText(searchTerm);
+
+      // Define path mappings with normalization info
       const pathMap = {
-        category: 'categoryData.title',
-        subcategory: 'subjectData.title',
-        authors: 'authorData.name',
-        editors: 'editorData.name',
-        commentators: 'commentatorData.name',
-        caretakers: 'caretakerData.name',
-        muhashis: 'muhashiData.name',
-        publishers: 'publisherData.title',
-        roomNumber: 'address.roomNumber',
-        shelfNumber: 'address.shelfNumber',
-        wallNumber: 'address.wallNumber',
-        bookNumber: 'address.bookNumber'
+        // Title searches - use normalized fields
+        title: { path: 'normalizedTitle', useNormalized: true },
+        category: { path: 'categoryData.normalizedTitle', useNormalized: true },
+        subcategory: { path: 'subjectData.normalizedTitle', useNormalized: true },
+        subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
+        publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
+
+        // Name searches - use normalized fields
+        authors: { path: 'authorData.normalizedName', useNormalized: true },
+        editors: { path: 'editorData.normalizedName', useNormalized: true },
+        commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
+        caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
+        muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
+
+        // Address fields - no normalization needed
+        roomNumber: { path: 'address.roomNumber', useNormalized: false },
+        shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
+        wallNumber: { path: 'address.wallNumber', useNormalized: false },
+        bookNumber: { path: 'address.bookNumber', useNormalized: false }
       };
 
-      const path = pathMap[query] || query;
+      const fieldConfig = pathMap[query] || { path: query, useNormalized: false };
 
-      matchStage.push({
-        $match: {
-          [path]: { $regex: searchTerm, $options: 'i' }
-        }
-      });
+      if (fieldConfig.useNormalized) {
+        // For normalized fields, search using the normalized value
+        // Using regex on normalized field for partial matching
+        matchStage.push({
+          $match: {
+            [fieldConfig.path]: { $regex: normalizedSearchTerm, $options: 'i' }
+          }
+        });
+      } else {
+        // For non-normalized fields, use regular regex search
+        matchStage.push({
+          $match: {
+            [fieldConfig.path]: { $regex: searchTerm, $options: 'i' }
+          }
+        });
+      }
     }
 
     const projectStage = {
       $project: {
         title: 1,
+        normalizedTitle: 1, // Include normalized field in results if needed
         numberOfVolumes: 1,
         numberOfFolders: 1,
         editionNumber: 1,
@@ -401,9 +532,13 @@ class BookService {
 
   async createCategory(categoryData) {
     const { title } = categoryData;
-    let category = await Category.findOne({ title });
+    const normalizedTitle = this.normalizeArabicText(title); // ADD THIS
+    let category = await Category.findOne({ normalizedTitle }); // CHANGE THIS
     if (!category) {
-      category = new Category({ title });
+      category = new Category({
+        title,
+        normalizedTitle // ADD THIS
+      });
       await category.save();
     }
     return category;
@@ -415,9 +550,13 @@ class BookService {
 
   async createSubject(subjectData) {
     const { title } = subjectData;
-    let subject = await Subject.findOne({ title });
+    const normalizedTitle = this.normalizeArabicText(title); // ADD THIS
+    let subject = await Subject.findOne({ normalizedTitle }); // CHANGE THIS
     if (!subject) {
-      subject = new Subject({ title });
+      subject = new Subject({
+        title,
+        normalizedTitle // ADD THIS
+      });
       await subject.save();
     }
     return subject;
@@ -429,26 +568,35 @@ class BookService {
 
   async createPerson(personData) {
     const { name, type } = personData;
-    let person = await Author.findOne({ name, type });
+    const normalizedName = this.normalizeArabicText(name); // ADD THIS
+    let person = await Author.findOne({ normalizedName, type }); // CHANGE THIS
     if (!person) {
-      person = new Author({ name, type });
+      person = new Author({
+        name,
+        type,
+        normalizedName // ADD THIS
+      });
       await person.save();
     }
     return person;
   }
 
-  async getPublishers() {
-    return await Publisher.find();
-  }
-
   async createPublisher(publisherData) {
     const { title } = publisherData;
-    let publisher = await Publisher.findOne({ title });
+    const normalizedTitle = this.normalizeArabicText(title); // ADD THIS
+    let publisher = await Publisher.findOne({ normalizedTitle }); // CHANGE THIS
     if (!publisher) {
-      publisher = new Publisher({ title });
+      publisher = new Publisher({
+        title,
+        normalizedTitle // ADD THIS
+      });
       await publisher.save();
     }
     return publisher;
+  }
+
+  async getPublishers() {
+    return await Publisher.find();
   }
 }
 
