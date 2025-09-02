@@ -47,27 +47,27 @@ async function main() {
             wallNumber: "$address.wallNumber",
             shelfNumber: "$address.shelfNumber",
             bookNumber: "$address.bookNumber",
-            volume: {
+            folder: {
                $cond: [
-                  { $gt: ["$numberOfVolumes", 1] },
-                  { $range: [1, { $add: ["$numberOfVolumes", 1] }] },
+                  { $gt: ["$numberOfFolders", 1] },
+                  { $range: [1, { $add: ["$numberOfFolders", 1] }] },
                   "$$REMOVE" // completely remove field if condition not met
                ]
             },
             categoryAndSubject: {
                $concat: [
-                  { $ifNull: [{ $first: "$category.title" }, ""] },
-                  " ",
+                  // { $ifNull: [{ $first: "$category.title" }, ""] },
+                  // " ",
                   { $ifNull: [{ $first: "$subject.title" }, ""] }
                ]
             }
          }
       },
 
-      // Only unwind volumes if it exists
+      // Only unwind folders if it exists
       {
          $unwind: {
-            path: "$volume",
+            path: "$folder",
             preserveNullAndEmptyArrays: true
          }
       }
@@ -98,7 +98,7 @@ async function main() {
          r.wallNumber || '',
          r.shelfNumber || '',
          r.bookNumber || '',
-         r.volume || ''
+         r.folder || ''
       ]);
    }
 

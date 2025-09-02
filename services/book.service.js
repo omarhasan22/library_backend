@@ -203,111 +203,64 @@ class BookService {
     return book;
   }
 
-  async getAllBooks(query = '', searchTerm = '') {
-    // Lookup stages
+  escapeRegex(str = '') {
+    // escape regex special chars so user input can't break pattern matching
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  async getAllBooks(
+    query = '',
+    searchTerm = '',
+    page = 1,
+    limit = 20,
+    sortField = null,
+    sortDirection = 'asc'
+  ) {
+    // normalize numeric params
+    page = Number(page) || 1;
+    limit = Number(limit) || 20;
+    const skip = (page - 1) * limit;
+    const sortDir = sortDirection === 'desc' ? -1 : 1;
+    console.log("query ", query);
+    console.log("searchTerm ", searchTerm);
+
+    // lookups (same as you had)
     const lookupStages = [
-      {
-        $lookup: {
-          from: 'authors',
-          localField: 'authors',
-          foreignField: '_id',
-          as: 'authorData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'authors',
-          localField: 'commentators',
-          foreignField: '_id',
-          as: 'commentatorData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'authors',
-          localField: 'editors',
-          foreignField: '_id',
-          as: 'editorData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'authors',
-          localField: 'caretakers',
-          foreignField: '_id',
-          as: 'caretakerData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'authors',
-          localField: 'muhashis',
-          foreignField: '_id',
-          as: 'muhashiData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'publishers',
-          localField: 'publishers',
-          foreignField: '_id',
-          as: 'publisherData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'categories',
-          localField: 'category',
-          foreignField: '_id',
-          as: 'categoryData'
-        }
-      },
-      {
-        $lookup: {
-          from: 'subjects',
-          localField: 'subject',
-          foreignField: '_id',
-          as: 'subjectData'
-        }
-      }
+      { $lookup: { from: 'authors', localField: 'authors', foreignField: '_id', as: 'authorData' } },
+      { $lookup: { from: 'authors', localField: 'commentators', foreignField: '_id', as: 'commentatorData' } },
+      { $lookup: { from: 'authors', localField: 'editors', foreignField: '_id', as: 'editorData' } },
+      { $lookup: { from: 'authors', localField: 'caretakers', foreignField: '_id', as: 'caretakerData' } },
+      { $lookup: { from: 'authors', localField: 'muhashis', foreignField: '_id', as: 'muhashiData' } },
+      { $lookup: { from: 'publishers', localField: 'publishers', foreignField: '_id', as: 'publisherData' } },
+      { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'categoryData' } },
+      { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subjectData' } }
     ];
 
+    // build matchStage same logic, but produce an array `matchStage` to spread later
     const matchStage = [];
-
     if (query === 'advanced') {
       let filters = [];
-      try {
-        filters = JSON.parse(searchTerm);
-      } catch {
-        filters = [];
-      }
+      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
 
       const conditions = filters.map(({ field, value }) => {
-        // Normalize the search value
         const normalizedValue = this.normalizeArabicText(value);
-
-        // Map fields to their paths and determine if they should use normalized fields
         const pathMap = {
-          // For title fields, use normalized versions
           title: { path: 'normalizedTitle', useNormalized: true },
           category: { path: 'categoryData.normalizedTitle', useNormalized: true },
           subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
           publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
 
-          // For name fields, use normalized versions
           authors: { path: 'authorData.normalizedName', useNormalized: true },
           editors: { path: 'editorData.normalizedName', useNormalized: true },
           commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
           caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
           muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
 
-          // Address fields don't need normalization
           roomNumber: { path: 'address.roomNumber', useNormalized: false },
           shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
           wallNumber: { path: 'address.wallNumber', useNormalized: false },
           bookNumber: { path: 'address.bookNumber', useNormalized: false },
 
-          // Other fields
           numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
           numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
           editionNumber: { path: 'editionNumber', useNormalized: false },
@@ -316,81 +269,156 @@ class BookService {
           notes: { path: 'notes', useNormalized: false }
         };
 
-        const fieldConfig = pathMap[field] || { path: field, useNormalized: false };
+        const cfg = pathMap[field] || { path: field, useNormalized: false };
 
-        if (fieldConfig.useNormalized) {
-          // For normalized fields, use exact match with normalized value
-          return {
-            [fieldConfig.path]: normalizedValue
-          };
+        if (cfg.useNormalized) {
+          // match exact normalized value (you used normalized plain equality earlier)
+          return { [cfg.path]: normalizedValue };
         } else {
-          // For non-normalized fields, use regex as before
-          return {
-            [fieldConfig.path]: { $regex: value, $options: 'i' }
-          };
+          return { [cfg.path]: { $regex: value, $options: 'i' } };
         }
       });
 
-      if (conditions.length) {
-        matchStage.push({ $match: { $and: conditions } });
-      }
+      if (conditions.length) matchStage.push({ $match: { $and: conditions } });
 
-    } else if (searchTerm.trim()) {
-      // Normalize the search term
-      const normalizedSearchTerm = this.normalizeArabicText(searchTerm);
+    }
+    else if (searchTerm && String(searchTerm).trim()) {
+      const rawTerm = String(searchTerm).trim();
+      // fallback: if normalize returns empty, use rawTerm
+      const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
 
-      // Define path mappings with normalization info
+      const rawEsc = this.escapeRegex(rawTerm);
+      const normEsc = this.escapeRegex(normalizedSearchTerm);
+      console.log("normEsc ", normEsc);
+
+      // map of searchable fields and whether they are normalized in DB
       const pathMap = {
-        // Title searches - use normalized fields
         title: { path: 'normalizedTitle', useNormalized: true },
         category: { path: 'categoryData.normalizedTitle', useNormalized: true },
         subcategory: { path: 'subjectData.normalizedTitle', useNormalized: true },
         subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
         publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
 
-        // Name searches - use normalized fields
-        authors: { path: 'authorData.normalizedName', useNormalized: true },
-        editors: { path: 'editorData.normalizedName', useNormalized: true },
-        commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
-        caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
-        muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
+        authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
+        editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
+        commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
+        caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
+        muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
 
-        // Address fields - no normalization needed
         roomNumber: { path: 'address.roomNumber', useNormalized: false },
         shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
         wallNumber: { path: 'address.wallNumber', useNormalized: false },
-        bookNumber: { path: 'address.bookNumber', useNormalized: false }
+        bookNumber: { path: 'address.bookNumber', useNormalized: false },
+
+        numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
+        numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
+        editionNumber: { path: 'editionNumber', useNormalized: false },
+        publicationYear: { path: 'publicationYear', useNormalized: false },
+        pageCount: { path: 'pageCount', useNormalized: false },
+        notes: { path: 'notes', useNormalized: false }
       };
 
-      const fieldConfig = pathMap[query] || { path: query, useNormalized: false };
+      // If the client requested a single field via `query` (e.g., q=title)
+      const fieldConfig = pathMap[query] || null;
 
-      if (fieldConfig.useNormalized) {
-        // For normalized fields, search using the normalized value
-        // Using regex on normalized field for partial matching
-        matchStage.push({
-          $match: {
-            [fieldConfig.path]: { $regex: normalizedSearchTerm, $options: 'i' }
+      if (fieldConfig) {
+        // build single-field match
+        if (fieldConfig.isArray) {
+          // use $elemMatch for arrays of subdocs (safer)
+          if (fieldConfig.useNormalized) {
+            matchStage.push({
+              $match: {
+                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
+                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: normEsc, $options: 'i' } }
+                }
+              }
+            });
+          } else {
+            matchStage.push({
+              $match: {
+                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
+                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: rawEsc, $options: 'i' } }
+                }
+              }
+            });
           }
-        });
+        } else {
+          // normal field (string or number)
+          matchStage.push({
+            $match: {
+              [fieldConfig.path]: { $regex: fieldConfig.useNormalized ? normEsc : rawEsc, $options: 'i' }
+            }
+          });
+        }
       } else {
-        // For non-normalized fields, use regular regex search
-        matchStage.push({
-          $match: {
-            [fieldConfig.path]: { $regex: searchTerm, $options: 'i' }
-          }
+        // build an $or across many fields (default broad search)
+        const orConditions = [];
+
+        // normalized string fields
+        ['title', 'category', 'subject', 'subcategory', 'publishers'].forEach(k => {
+          const cfg = pathMap[k];
+          if (!cfg) return;
+          orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
         });
+
+        // author-like arrays (use $elemMatch)
+        ['authors', 'editors', 'commentators', 'caretakers', 'muhashis'].forEach(k => {
+          const cfg = pathMap[k];
+          if (!cfg) return;
+          // parent array path, last part is field in subdoc
+          const parts = cfg.path.split('.');
+          const parent = parts.slice(0, -1).join('.');
+          const childField = parts.slice(-1)[0];
+          orConditions.push({ [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } });
+          // also try matching top-level dotted path (some Mongo versions accept it)
+          orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
+        });
+
+        // raw fields (address numeric fields and plain text)
+        ['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber', 'notes'].forEach(k => {
+          const cfg = pathMap[k];
+          if (!cfg) return;
+          orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
+        });
+
+        // numeric fields: try exact match if the term is numeric
+        if (!Number.isNaN(Number(rawTerm))) {
+          const n = Number(rawTerm);
+          ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].forEach(k => {
+            const cfg = pathMap[k];
+            if (!cfg) return;
+            orConditions.push({ [cfg.path]: n });
+          });
+        } else {
+          // also search numeric-like fields as strings
+          ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].forEach(k => {
+            const cfg = pathMap[k];
+            if (!cfg) return;
+            orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
+          });
+        }
+
+        // final push if we have any conditions
+        if (orConditions.length) {
+          matchStage.push({ $match: { $or: orConditions } });
+        } else {
+          // fallback: no conditions => do not restrict (but log to debug)
+          console.warn('No search conditions created for non-advanced searchTerm:', rawTerm);
+        }
       }
     }
 
+    // projection: build displayAddress that avoids names and appends volume when >1
     const projectStage = {
       $project: {
         title: 1,
-        normalizedTitle: 1, // Include normalized field in results if needed
+        normalizedTitle: 1,
         numberOfVolumes: 1,
         numberOfFolders: 1,
         editionNumber: 1,
         publicationYear: 1,
         pageCount: 1,
+        // keep raw address object if needed elsewhere but don't render names from it:
         address: 1,
         imageUrl: 1,
         authors: '$authorData',
@@ -402,54 +430,131 @@ class BookService {
         category: { $arrayElemAt: ['$categoryData', 0] },
         subject: { $arrayElemAt: ['$subjectData', 0] },
         notes: 1,
+
+        // displayAddress: compose only numeric address pieces and append volume count only when > 1
+        displayAddress: {
+          $let: {
+            vars: {
+              parts: [
+                { $ifNull: ['$address.roomNumber', ''] },
+                { $ifNull: ['$address.shelfNumber', ''] },
+                { $ifNull: ['$address.wallNumber', ''] },
+                { $ifNull: ['$address.bookNumber', ''] }
+              ]
+            },
+            in: {
+              $trim: {
+                input: {
+                  $concat: [
+                    {
+                      // reduce parts into a string separated by " / " ignoring empty values
+                      $reduce: {
+                        input: '$$parts',
+                        initialValue: '',
+                        in: {
+                          $cond: [
+                            { $eq: ['$$this', ''] },
+                            '$$value',
+                            {
+                              $cond: [
+                                { $eq: ['$$value', ''] },
+                                '$$this',
+                                { $concat: ['$$value', ' / ', '$$this'] }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      // append volume suffix only if numberOfVolumes exists and > 1
+                      $cond: [
+                        { $and: [{ $ifNull: ['$numberOfVolumes', false] }, { $gt: ['$numberOfVolumes', 1] }] },
+                        { $concat: [', v.', { $toString: '$numberOfVolumes' }] },
+                        ''
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
       }
     };
 
+    // Build one pipeline that uses facet to return both paginated docs and counts/uniques
     const pipeline = [
       ...lookupStages,
       ...matchStage,
-      projectStage
-    ];
-
-    const countsPipeline = [
-      ...lookupStages,
-      ...matchStage,
+      // project early so counts can use populated arrays (authorData/publisherData) for unique counts
+      projectStage,
+      // optional sort
+      ...(sortField ? [{ $sort: { [sortField]: sortDir } }] : []),
       {
         $facet: {
-          totalBooks: [{ $count: 'count' }],
+          paginatedResults: [
+            { $skip: skip },
+            { $limit: limit }
+          ],
+          counts: [
+            { $count: 'filteredCount' }
+          ],
           uniqueAuthors: [
-            { $unwind: '$authors' },
-            { $group: { _id: '$authors' } },
+            // unwind populated authors and count unique author _ids
+            { $unwind: { path: '$authors', preserveNullAndEmptyArrays: true } },
+            { $group: { _id: '$authors._id' } },
             { $count: 'count' }
           ],
           uniquePublishers: [
-            { $unwind: '$publishers' },
-            { $group: { _id: '$publishers' } },
+            { $unwind: { path: '$publishers', preserveNullAndEmptyArrays: true } },
+            { $group: { _id: '$publishers._id' } },
             { $count: 'count' }
           ]
         }
       },
+      // flatten counts into predictable values
       {
         $project: {
-          totalBooks: { $ifNull: [{ $arrayElemAt: ['$totalBooks.count', 0] }, 0] },
+          paginatedResults: 1,
+          filteredCount: { $ifNull: [{ $arrayElemAt: ['$counts.filteredCount', 0] }, 0] },
           uniqueAuthors: { $ifNull: [{ $arrayElemAt: ['$uniqueAuthors.count', 0] }, 0] },
           uniquePublishers: { $ifNull: [{ $arrayElemAt: ['$uniquePublishers.count', 0] }, 0] }
         }
       }
     ];
 
-    const [books, [counts]] = await Promise.all([
-      BookModel.aggregate(pipeline),
-      BookModel.aggregate(countsPipeline)
+    // Execute aggregation
+    const aggResult = await BookModel.aggregate(pipeline);
+
+    // aggResult is an array with a single doc
+    const resultDoc = aggResult[0] || { paginatedResults: [], filteredCount: 0, uniqueAuthors: 0, uniquePublishers: 0 };
+
+    // totalBooks: still useful - total collection size without filters
+    const totalAll = await BookModel.countDocuments();
+
+    return {
+      books: resultDoc.paginatedResults || [],
+      totalBooks: totalAll || 0,
+      filteredCount: resultDoc.filteredCount || 0,
+      uniqueAuthors: resultDoc.uniqueAuthors || 0,
+      uniquePublishers: resultDoc.uniquePublishers || 0
+    };
+  }
+
+  // Fast & light (approximate)
+  async getStatistics() {
+    const [totalBooks, totalAuthors] = await Promise.all([
+      BookModel.estimatedDocumentCount(),
+      Author.estimatedDocumentCount()
     ]);
 
     return {
-      books,
-      totalBooks: counts?.totalBooks || 0,
-      uniqueAuthors: counts?.uniqueAuthors || 0,
-      uniquePublishers: counts?.uniquePublishers || 0
+      totalBooks: totalBooks || 0,
+      totalAuthors: totalAuthors || 0
     };
   }
+
 
   async getBookById(id) {
     return await BookModel.findById(id).populate([
@@ -527,8 +632,17 @@ class BookService {
   }
 
   async getCategories() {
-    return await Category.find();
+    return Category.aggregate([
+      {
+        $project: {
+          title: 1,
+        /* other fields you want: */ subjects: 1,
+          subjectsCount: { $size: { $ifNull: ["$subjects", []] } }
+        }
+      }
+    ]);
   }
+
 
   async createCategory(categoryData) {
     const { title } = categoryData;

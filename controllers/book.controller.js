@@ -73,16 +73,40 @@ class BookController {
 
   async getAllBooks(req, res) {
     try {
-      const query = req.query.q || '';
+      const query = req.query.query || '';
       const searchTerm = req.query.searchTerm || '';
 
-      const result = await BookService.getAllBooks(query, searchTerm);
+      // Pagination & sorting params (fall back to defaults)
+      const page = parseInt(req.query.page, 10) || 1;
+      const limit = parseInt(req.query.limit, 10) || 20;
+      const sortField = req.query.sortField || null;
+      const sortDirection = req.query.sortDirection === 'desc' ? 'desc' : 'asc';
+
+      const result = await BookService.getAllBooks(
+        query,
+        searchTerm,
+        page,
+        limit,
+        sortField,
+        sortDirection
+      );
+
       res.status(200).json(result);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   }
 
+
+  getStatistics = async (req, res) => {
+    try {
+      const statistics = await BookService.getStatistics();
+      return res.status(200).json(statistics);
+    } catch (err) {
+      console.error('getStatistics error:', err);
+      return res.status(500).json({ error: 'Failed to load statistics' });
+    }
+  };
 
   async getBookById(req, res) {
     try {
