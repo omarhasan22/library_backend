@@ -11,13 +11,13 @@ const assetsDir = path.join(__dirname, 'assets');
 if (!fs.existsSync(assetsDir)) {
    fs.mkdirSync(assetsDir, { recursive: true });
 }
-const OUT_FILE = path.join(assetsDir, 'books_locations_R4.xlsx');
+const OUT_FILE = path.join(assetsDir, 'books_locations_R2.xlsx');
 
 async function main() {
    await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
    const pipeline = [
-      { $match: { "address.roomNumber": '4' } },
+      { $match: { "address.roomNumber": '2' } },
 
       // Lookup subject
       {

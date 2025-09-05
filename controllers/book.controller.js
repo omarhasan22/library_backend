@@ -25,41 +25,41 @@ class BookController {
       // }
 
       // Image processing logic
-      let processedImagePath = '';
-      if (req.file) {
-        const originalPath = req.file.path; // Path where multer saved the file
-        const bookTitleSlug = bookData.title ? bookData.title.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase() : `book-${Date.now()}`;
-        const filename = `${bookTitleSlug}-${Date.now()}.webp`; // Using webp for better compression
-        const destinationPath = path.join(__dirname, '../assets/books', filename);
+      // let processedImagePath = '';
+      // if (req.file) {
+      //   const originalPath = req.file.path; // Path where multer saved the file
+      //   const bookTitleSlug = bookData.title ? bookData.title.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase() : `book-${Date.now()}`;
+      //   const filename = `${bookTitleSlug}-${Date.now()}.webp`; // Using webp for better compression
+      //   const destinationPath = path.join(__dirname, '../assets/books', filename);
 
-        try {
-          await sharp(originalPath)
-            .resize({
-              width: 400, // Max width, adjust as needed
-              height: 600, // Max height, adjust as needed, maintaining aspect ratio or with crop
-              fit: sharp.fit.inside, // Ensures image fits within dimensions, maintaining aspect ratio
-              withoutEnlargement: true // Don't enlarge images smaller than dimensions
-            })
-            .webp({ quality: 80 }) // Convert to webp and set quality
-            .toFile(destinationPath);
+      //   try {
+      //     await sharp(originalPath)
+      //       .resize({
+      //         width: 400, // Max width, adjust as needed
+      //         height: 600, // Max height, adjust as needed, maintaining aspect ratio or with crop
+      //         fit: sharp.fit.inside, // Ensures image fits within dimensions, maintaining aspect ratio
+      //         withoutEnlargement: true // Don't enlarge images smaller than dimensions
+      //       })
+      //       .webp({ quality: 80 }) // Convert to webp and set quality
+      //       .toFile(destinationPath);
 
-          processedImagePath = `/assets/books/${filename}`; // Path to be saved in DB
+      //     processedImagePath = `/assets/books/${filename}`; // Path to be saved in DB
 
-          // Delete the original file uploaded by multer
-          fs.unlink(originalPath, (err) => {
-            if (err) console.error('Error deleting original file:', err);
-          });
+      //     // Delete the original file uploaded by multer
+      //     fs.unlink(originalPath, (err) => {
+      //       if (err) console.error('Error deleting original file:', err);
+      //     });
 
-        } catch (imageError) {
-          console.error('Image processing failed:', imageError);
-          // Delete the original file even if processing fails
-          fs.unlink(originalPath, (err) => {
-            if (err) console.error('Error deleting original file after processing failure:', err);
-          });
-          return res.status(500).json({ error: 'Failed to process image.' });
-        }
-      }
-      bookData.imagePath = processedImagePath; // Set the processed image path
+      //   } catch (imageError) {
+      //     console.error('Image processing failed:', imageError);
+      //     // Delete the original file even if processing fails
+      //     fs.unlink(originalPath, (err) => {
+      //       if (err) console.error('Error deleting original file after processing failure:', err);
+      //     });
+      //     return res.status(500).json({ error: 'Failed to process image.' });
+      //   }
+      // }
+      // bookData.imagePath = processedImagePath; // Set the processed image path
 
       const book = await BookService.createBook(bookData);
       return res.status(201).json(book);
