@@ -216,15 +216,13 @@ class BookService {
     sortField = null,
     sortDirection = 'asc'
   ) {
-    // normalize numeric params
+    // Normalize numeric params
     page = Number(page) || 1;
     limit = Number(limit) || 20;
     const skip = (page - 1) * limit;
     const sortDir = sortDirection === 'desc' ? -1 : 1;
-    console.log("query ", query);
-    console.log("searchTerm ", searchTerm);
 
-    // lookups (same as you had)
+    // Lookups
     const lookupStages = [
       { $lookup: { from: 'authors', localField: 'authors', foreignField: '_id', as: 'authorData' } },
       { $lookup: { from: 'authors', localField: 'commentators', foreignField: '_id', as: 'commentatorData' } },
@@ -236,7 +234,7 @@ class BookService {
       { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subjectData' } }
     ];
 
-    // build matchStage same logic, but produce an array `matchStage` to spread later
+    // Build matchStage
     const matchStage = [];
     if (query === 'advanced') {
       let filters = [];
@@ -272,7 +270,6 @@ class BookService {
         const cfg = pathMap[field] || { path: field, useNormalized: false };
 
         if (cfg.useNormalized) {
-          // match exact normalized value (you used normalized plain equality earlier)
           return { [cfg.path]: normalizedValue };
         } else {
           return { [cfg.path]: { $regex: value, $options: 'i' } };
@@ -280,18 +277,14 @@ class BookService {
       });
 
       if (conditions.length) matchStage.push({ $match: { $and: conditions } });
-
     }
     else if (searchTerm && String(searchTerm).trim()) {
       const rawTerm = String(searchTerm).trim();
-      // fallback: if normalize returns empty, use rawTerm
       const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
 
       const rawEsc = this.escapeRegex(rawTerm);
       const normEsc = this.escapeRegex(normalizedSearchTerm);
-      console.log("normEsc ", normEsc);
 
-      // map of searchable fields and whether they are normalized in DB
       const pathMap = {
         title: { path: 'normalizedTitle', useNormalized: true },
         category: { path: 'categoryData.normalizedTitle', useNormalized: true },
@@ -318,13 +311,10 @@ class BookService {
         notes: { path: 'notes', useNormalized: false }
       };
 
-      // If the client requested a single field via `query` (e.g., q=title)
       const fieldConfig = pathMap[query] || null;
 
       if (fieldConfig) {
-        // build single-field match
         if (fieldConfig.isArray) {
-          // use $elemMatch for arrays of subdocs (safer)
           if (fieldConfig.useNormalized) {
             matchStage.push({
               $match: {
@@ -343,7 +333,6 @@ class BookService {
             });
           }
         } else {
-          // normal field (string or number)
           matchStage.push({
             $match: {
               [fieldConfig.path]: { $regex: fieldConfig.useNormalized ? normEsc : rawEsc, $options: 'i' }
@@ -351,37 +340,30 @@ class BookService {
           });
         }
       } else {
-        // build an $or across many fields (default broad search)
         const orConditions = [];
 
-        // normalized string fields
         ['title', 'category', 'subject', 'subcategory', 'publishers'].forEach(k => {
           const cfg = pathMap[k];
           if (!cfg) return;
           orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
         });
 
-        // author-like arrays (use $elemMatch)
         ['authors', 'editors', 'commentators', 'caretakers', 'muhashis'].forEach(k => {
           const cfg = pathMap[k];
           if (!cfg) return;
-          // parent array path, last part is field in subdoc
           const parts = cfg.path.split('.');
           const parent = parts.slice(0, -1).join('.');
           const childField = parts.slice(-1)[0];
           orConditions.push({ [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } });
-          // also try matching top-level dotted path (some Mongo versions accept it)
           orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
         });
 
-        // raw fields (address numeric fields and plain text)
         ['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber', 'notes'].forEach(k => {
           const cfg = pathMap[k];
           if (!cfg) return;
           orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
         });
 
-        // numeric fields: try exact match if the term is numeric
         if (!Number.isNaN(Number(rawTerm))) {
           const n = Number(rawTerm);
           ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].forEach(k => {
@@ -390,7 +372,6 @@ class BookService {
             orConditions.push({ [cfg.path]: n });
           });
         } else {
-          // also search numeric-like fields as strings
           ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].forEach(k => {
             const cfg = pathMap[k];
             if (!cfg) return;
@@ -398,17 +379,15 @@ class BookService {
           });
         }
 
-        // final push if we have any conditions
         if (orConditions.length) {
           matchStage.push({ $match: { $or: orConditions } });
         } else {
-          // fallback: no conditions => do not restrict (but log to debug)
           console.warn('No search conditions created for non-advanced searchTerm:', rawTerm);
         }
       }
     }
 
-    // projection: build displayAddress that avoids names and appends volume when >1
+    // Projection stage
     const projectStage = {
       $project: {
         title: 1,
@@ -418,7 +397,6 @@ class BookService {
         editionNumber: 1,
         publicationYear: 1,
         pageCount: 1,
-        // keep raw address object if needed elsewhere but don't render names from it:
         address: 1,
         imageUrl: 1,
         authors: '$authorData',
@@ -430,8 +408,6 @@ class BookService {
         category: { $arrayElemAt: ['$categoryData', 0] },
         subject: { $arrayElemAt: ['$subjectData', 0] },
         notes: 1,
-
-        // displayAddress: compose only numeric address pieces and append volume count only when > 1
         displayAddress: {
           $let: {
             vars: {
@@ -447,7 +423,6 @@ class BookService {
                 input: {
                   $concat: [
                     {
-                      // reduce parts into a string separated by " / " ignoring empty values
                       $reduce: {
                         input: '$$parts',
                         initialValue: '',
@@ -467,7 +442,6 @@ class BookService {
                       }
                     },
                     {
-                      // append volume suffix only if numberOfVolumes exists and > 1
                       $cond: [
                         { $and: [{ $ifNull: ['$numberOfVolumes', false] }, { $gt: ['$numberOfVolumes', 1] }] },
                         { $concat: [', v.', { $toString: '$numberOfVolumes' }] },
@@ -483,14 +457,45 @@ class BookService {
       }
     };
 
-    // Build one pipeline that uses facet to return both paginated docs and counts/uniques
+    // Build sort stage with special handling for address fields
+    let sortStage = [];
+    if (sortField) {
+      if (['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber'].includes(sortField)) {
+        // Handle address fields with numeric sorting
+        sortStage = [{
+          $addFields: {
+            tempRoom: { $convert: { input: '$address.roomNumber', to: 'int', onError: 0, onNull: 0 } },
+            tempShelf: { $convert: { input: '$address.shelfNumber', to: 'int', onError: 0, onNull: 0 } },
+            tempWall: { $convert: { input: '$address.wallNumber', to: 'int', onError: 0, onNull: 0 } },
+            tempBook: { $convert: { input: '$address.bookNumber', to: 'int', onError: 0, onNull: 0 } }
+          }
+        }, {
+          $sort: {
+            tempRoom: sortDir,
+            tempShelf: sortDir,
+            tempWall: sortDir,
+            tempBook: sortDir
+          }
+        }, {
+          $project: {
+            tempRoom: 0,
+            tempShelf: 0,
+            tempWall: 0,
+            tempBook: 0
+          }
+        }];
+      } else {
+        // Normal sorting for other fields
+        sortStage = [{ $sort: { [sortField]: sortDir } }];
+      }
+    }
+
+    // Build pipeline
     const pipeline = [
       ...lookupStages,
       ...matchStage,
-      // project early so counts can use populated arrays (authorData/publisherData) for unique counts
       projectStage,
-      // optional sort
-      ...(sortField ? [{ $sort: { [sortField]: sortDir } }] : []),
+      ...sortStage,
       {
         $facet: {
           paginatedResults: [
@@ -501,7 +506,6 @@ class BookService {
             { $count: 'filteredCount' }
           ],
           uniqueAuthors: [
-            // unwind populated authors and count unique author _ids
             { $unwind: { path: '$authors', preserveNullAndEmptyArrays: true } },
             { $group: { _id: '$authors._id' } },
             { $count: 'count' }
@@ -513,7 +517,6 @@ class BookService {
           ]
         }
       },
-      // flatten counts into predictable values
       {
         $project: {
           paginatedResults: 1,
@@ -527,10 +530,8 @@ class BookService {
     // Execute aggregation
     const aggResult = await BookModel.aggregate(pipeline);
 
-    // aggResult is an array with a single doc
+    // Process results
     const resultDoc = aggResult[0] || { paginatedResults: [], filteredCount: 0, uniqueAuthors: 0, uniquePublishers: 0 };
-
-    // totalBooks: still useful - total collection size without filters
     const totalAll = await BookModel.countDocuments();
 
     return {
