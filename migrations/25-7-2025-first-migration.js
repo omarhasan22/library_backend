@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const Book = require('../models/book.model'); // adjust if path is different
 
 // 🛠 Connect to your DB
-const MONGO_URI = 'mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority'; // change this
+const MONGO_URI = process.env.MONGO_URI_PROD
+
 mongoose.connect(MONGO_URI)
    .then(() => {
       console.log('✅ Connected to MongoDB');

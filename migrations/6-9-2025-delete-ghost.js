@@ -11,7 +11,8 @@
 const mongoose = require('mongoose');
 const argv = require('minimist')(process.argv.slice(2));
 
-const MONGO_URI = argv.uri || process.env.MONGO_URI || 'mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority';
+const MONGO_URI = process.env.MONGO_URI_PROD
+
 const DRY_RUN = !!argv['dry-run'];
 
 const Author = require('../models/author.model');

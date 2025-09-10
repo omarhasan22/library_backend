@@ -5,7 +5,7 @@
 //   DRY_RUN=true MONGO_URI="..." node migrations/populateCategorySubjects.js
 
 const mongoose = require('mongoose');
-const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority';
+const MONGO_URI = process.env.MONGO_URI_PROD
 const DRY_RUN = !!process.env.DRY_RUN;
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || '1000', 10);
 

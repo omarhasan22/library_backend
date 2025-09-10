@@ -1,7 +1,8 @@
 // migrations/add-normalized-fields.js
 const mongoose = require('mongoose');
+const MONGO_URI = process.env.MONGO_URI_PROD
 
-mongoose.connect('mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority', { useNewUrlParser: true, useUnifiedTopology: true });
+mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
 // Import models
 const Author = require('../models/author.model');

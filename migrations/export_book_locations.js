@@ -4,20 +4,20 @@ const mongoose = require('mongoose');
 const ExcelJS = require('exceljs');
 const Book = require('../models/book.model'); // Adjust path to your model
 
-const MONGO_URI = 'mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority';
+const MONGO_URI = process.env.MONGO_URI_PROD
 
 // Save inside backend project's ./assets folder
 const assetsDir = path.join(__dirname, 'assets');
 if (!fs.existsSync(assetsDir)) {
    fs.mkdirSync(assetsDir, { recursive: true });
 }
-const OUT_FILE = path.join(assetsDir, 'books_locations_R2.xlsx');
+const OUT_FILE = path.join(assetsDir, 'books_locations_R1.xlsx');
 
 async function main() {
    await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
 
    const pipeline = [
-      { $match: { "address.roomNumber": '2' } },
+      { $match: { "address.roomNumber": '1' } },
 
       // Lookup subject
       {

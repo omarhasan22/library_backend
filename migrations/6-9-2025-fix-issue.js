@@ -18,7 +18,8 @@
 
 const mongoose = require('mongoose');
 const argv = require('minimist')(process.argv.slice(2));
-const MONGO_URI = argv.uri || process.env.MONGO_URI || 'mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority';
+const MONGO_URI = process.env.MONGO_URI_PROD
+
 const DRY_RUN = argv['dry-run'] || false;
 const MAX_CHAIN_DEPTH = 10;
 
@@ -207,10 +208,10 @@ async function main() {
 
    // Cursor: only books where address.roomNumber == '1' (string) or 1 (number)
    const cursor = Book.find({
-      $and: [
-         { $or: [{ 'address.roomNumber': '2' }, { 'address.roomNumber': 1 }] },
-         { 'address.wallNumber': 'د' }
-      ]
+      // $and: [
+      $or: [{ 'address.roomNumber': '6' }, { 'address.roomNumber': 6 }]
+      // { 'address.wallNumber': 'د' }
+      // ]
    }).lean().cursor();
 
    let processed = 0;

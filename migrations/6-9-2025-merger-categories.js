@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
+const mongoURI = process.env.MONGO_URI_PROD
 
 // Connect to MongoDB
-mongoose.connect('mongodb+srv://omarhasan22:81195404OMAR@cluster0.e47czbw.mongodb.net/myLibrary?retryWrites=true&w=majority', {
+mongoose.connect(mongoURI, {
    useNewUrlParser: true,
    useUnifiedTopology: true,
 });
@@ -14,8 +15,8 @@ async function updateBooksSubject() {
       console.log('Starting book subject update...');
 
       // Define the subject IDs
-      const oldSubjectId = '68a785ee6b3fbe1d69a898a7';
-      const newSubjectId = '68aba466cea800ffbed398aa';
+      const oldSubjectId = '68b855956664e200731f2087';
+      const newSubjectId = '68b89d5a05760d287c6cd532';
 
       // Count books with the old subject
       const countBefore = await Book.countDocuments({ subject: oldSubjectId });
