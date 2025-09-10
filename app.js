@@ -15,9 +15,6 @@ const mongoURI = isProduction
 	? process.env.MONGO_URI_PROD
 	: process.env.MONGO_URI_LOCAL;
 
-
-console.log(mongoURI);
-
 const app = express();
 
 const options = {
