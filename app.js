@@ -9,12 +9,12 @@ const swaggerUI = require('swagger-ui-express');
 const swaggerJSDoc = require('swagger-jsdoc');
 const path = require('path');
 
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = process.env.NODE_ENV === 'development';
 
 const mongoURI = process.env.MONGO_URI_LOCAL
-//  isProduction
-// 	? process.env.MONGO_URI_PROD
-// 	: process.env.MONGO_URI_LOCAL;
+isProduction
+	? process.env.MONGO_URI_PROD
+	: process.env.MONGO_URI_LOCAL;
 
 const app = express();
 
