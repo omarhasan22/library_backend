@@ -11,9 +11,10 @@ const path = require('path');
 
 const isProduction = process.env.NODE_ENV === 'production';
 
-const mongoURI = isProduction
-	? process.env.MONGO_URI_PROD
-	: process.env.MONGO_URI_LOCAL;
+const mongoURI = process.env.MONGO_URI_LOCAL
+//  isProduction
+// 	? process.env.MONGO_URI_PROD
+// 	: process.env.MONGO_URI_LOCAL;
 
 const app = express();
 
