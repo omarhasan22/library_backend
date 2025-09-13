@@ -4,17 +4,17 @@ const Book = require('../models/book.model');
 class BorrowService {
   async borrowBook(data) {
     console.log('Borrowing book:', data);
-    
+
     const book = await Book.findById(data.book);
     console.log('Book found:', book);
-    
+
     if (!book) throw new Error('Book not found');
 
     const existingBorrow = await Borrow.findOne({ book: data.book, returned: false });
     console.log('Existing borrow:', existingBorrow);
-    
+
     if (existingBorrow) throw new Error('Book is already borrowed');
-    data.user = data.user  
+    data.user = data.user
     const borrow = new Borrow(data);
     return await borrow.save();
   }

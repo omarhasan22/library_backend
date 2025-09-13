@@ -3,6 +3,8 @@
 //   MONGO_URI="mongodb://localhost:27017/yourdb" node migrations/populateCategorySubjects.js
 // For dry-run (no writes):
 //   DRY_RUN=true MONGO_URI="..." node migrations/populateCategorySubjects.js
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') }); // adjust path if needed
 
 const mongoose = require('mongoose');
 const MONGO_URI = process.env.MONGO_URI_PROD

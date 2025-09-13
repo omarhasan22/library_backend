@@ -2,10 +2,11 @@ const authService = require('../services/auth.service');
 const tokenService = require('../services/token.service');
 
 exports.login = async (req, res) => {
-  const { username, password } = req.body;
+  const { email, password } = req.body;
+  console.log("login controller", { email, password: password ? '***' : null });
 
   try {
-    const user = await authService.login(username, password);
+    const user = await authService.login(email, password);
 
     const accessToken = tokenService.generateAccessToken(user);
     const refreshToken = tokenService.generateRefreshToken(user);
