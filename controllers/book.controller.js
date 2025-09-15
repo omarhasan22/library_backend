@@ -79,7 +79,6 @@ class BookController {
       // Pagination & sorting params (fall back to defaults)
       const page = parseInt(req.query.page, 10) || 1;
       const limit = parseInt(req.query.limit, 10) || 20;
-      const sortField = req.query.sortField || null;
       const sortDirection = req.query.sortDirection === 'desc' ? 'desc' : 'asc';
 
       const result = await BookService.getAllBooks(
@@ -87,7 +86,6 @@ class BookController {
         searchTerm,
         page,
         limit,
-        sortField,
         sortDirection
       );
 

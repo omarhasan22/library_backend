@@ -212,13 +212,12 @@ class BookService {
     query = '',
     searchTerm = '',
     page = 1,
-    limit = 20,
-    sortField = null,
-    sortDirection = 'asc'
+    limit = 30,
+    sortDirection = 'asc' // keep sort direction, but sortField removed
   ) {
     // Normalize numeric params
     page = Number(page) || 1;
-    limit = Number(limit) || 20;
+    limit = Number(limit) || 30;
     const skip = (page - 1) * limit;
     const sortDir = sortDirection === 'desc' ? -1 : 1;
 
@@ -457,38 +456,62 @@ class BookService {
       }
     };
 
-    // Build sort stage with special handling for address fields
-    let sortStage = [];
-    if (sortField) {
-      if (['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber'].includes(sortField)) {
-        // Handle address fields with numeric sorting
-        sortStage = [{
-          $addFields: {
-            tempRoom: { $convert: { input: '$address.roomNumber', to: 'int', onError: 0, onNull: 0 } },
-            tempShelf: { $convert: { input: '$address.shelfNumber', to: 'int', onError: 0, onNull: 0 } },
-            tempWall: { $convert: { input: '$address.wallNumber', to: 'int', onError: 0, onNull: 0 } },
-            tempBook: { $convert: { input: '$address.bookNumber', to: 'int', onError: 0, onNull: 0 } }
-          }
-        }, {
-          $sort: {
-            tempRoom: sortDir,
-            tempShelf: sortDir,
-            tempWall: sortDir,
-            tempBook: sortDir
-          }
-        }, {
-          $project: {
-            tempRoom: 0,
-            tempShelf: 0,
-            tempWall: 0,
-            tempBook: 0
-          }
-        }];
-      } else {
-        // Normal sorting for other fields
-        sortStage = [{ $sort: { [sortField]: sortDir } }];
+    // Always sort by numeric address fields (room, shelf, wall, book),
+    // but handle non-numeric values (e.g. "أ ب") by falling back to string sorting.
+    const sortStage = [
+      {
+        $addFields: {
+          // Numeric attempts (null if not convertible)
+          tempRoomNum: { $convert: { input: '$address.roomNumber', to: 'int', onError: null, onNull: null } },
+          tempShelfNum: { $convert: { input: '$address.shelfNumber', to: 'int', onError: null, onNull: null } },
+          tempWallNum: { $convert: { input: '$address.wallNumber', to: 'int', onError: null, onNull: null } },
+          tempBookNum: { $convert: { input: '$address.bookNumber', to: 'int', onError: null, onNull: null } },
+
+          // String fallbacks (trimmed)
+          tempRoomStr: { $trim: { input: { $ifNull: ['$address.roomNumber', ''] } } },
+          tempShelfStr: { $trim: { input: { $ifNull: ['$address.shelfNumber', ''] } } },
+          tempWallStr: { $trim: { input: { $ifNull: ['$address.wallNumber', ''] } } },
+          tempBookStr: { $trim: { input: { $ifNull: ['$address.bookNumber', ''] } } },
+
+          // Flags: 0 if numeric exists, 1 if numeric is null — so numbers come first when sorting ascending.
+          // If you want non-numeric first, invert the 0/1 values.
+          tempRoomNumFlag: { $cond: [{ $ifNull: ['$tempRoomNum', false] }, 0, 1] },
+          tempShelfNumFlag: { $cond: [{ $ifNull: ['$tempShelfNum', false] }, 0, 1] },
+          tempWallNumFlag: { $cond: [{ $ifNull: ['$tempWallNum', false] }, 0, 1] },
+          tempBookNumFlag: { $cond: [{ $ifNull: ['$tempBookNum', false] }, 0, 1] }
+        }
+      },
+      {
+        $sort: {
+          // Primary ordering: by whether a numeric value exists (numbers first for asc)
+          tempRoomNumFlag: sortDir,
+          // If numeric exists for both, sort by numeric value; otherwise by string fallback
+          tempRoomNum: sortDir,
+          tempRoomStr: sortDir,
+
+          tempShelfNumFlag: sortDir,
+          tempShelfNum: sortDir,
+          tempShelfStr: sortDir,
+
+          tempWallNumFlag: sortDir,
+          tempWallNum: sortDir,
+          tempWallStr: sortDir,
+
+          tempBookNumFlag: sortDir,
+          tempBookNum: sortDir,
+          tempBookStr: sortDir
+        }
+      },
+      {
+        $project: {
+          // remove helper fields
+          tempRoomNum: 0, tempShelfNum: 0, tempWallNum: 0, tempBookNum: 0,
+          tempRoomStr: 0, tempShelfStr: 0, tempWallStr: 0, tempBookStr: 0,
+          tempRoomNumFlag: 0, tempShelfNumFlag: 0, tempWallNumFlag: 0, tempBookNumFlag: 0
+        }
       }
-    }
+    ];
+
 
     // Build pipeline
     const pipeline = [
@@ -526,6 +549,9 @@ class BookService {
         }
       }
     ];
+
+    // Optional: uncomment to debug the pipeline shape in logs
+    // console.dir(pipeline, { depth: null });
 
     // Execute aggregation
     const aggResult = await BookModel.aggregate(pipeline);
