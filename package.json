@@ -33,6 +33,8 @@
     "jsonwebtoken": "^8.5.1",
     "mongoose": "^6.3.4",
     "multer": "^2.0.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.1",
     "path": "^0.12.7",
     "sharp": "^0.34.3",
     "swagger-jsdoc": "^6.2.1",

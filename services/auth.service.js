@@ -46,6 +46,47 @@ class AuthService {
     if (!user) throw new Error('User not found');
     return user;
   }
+
+  async updateProfile(userId, updateData) {
+    const { username, email, currentPassword, newPassword } = updateData;
+
+    const user = await User.findById(userId).select('+password');
+    if (!user) throw new Error('User not found');
+
+    // Check if email is being changed and if it's already taken
+    if (email && email !== user.email) {
+      const existingUser = await User.findOne({ email: email.toLowerCase().trim() });
+      if (existingUser) throw new Error('Email already exists');
+    }
+
+    // Check if username is being changed and if it's already taken
+    if (username && username !== user.username) {
+      const existingUser = await User.findOne({ username });
+      if (existingUser) throw new Error('Username already exists');
+    }
+
+    // If changing password, verify current password
+    if (newPassword) {
+      if (!currentPassword) throw new Error('Current password is required to change password');
+
+      const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+      if (!isCurrentPasswordValid) throw new Error('Current password is incorrect');
+    }
+
+    // Update fields
+    const updateFields = {};
+    if (username) updateFields.username = username;
+    if (email) updateFields.email = email.toLowerCase().trim();
+    if (newPassword) updateFields.password = newPassword;
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      updateFields,
+      { new: true, runValidators: true }
+    ).select('-password');
+
+    return updatedUser;
+  }
 }
 
 module.exports = new AuthService();

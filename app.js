@@ -8,6 +8,7 @@ const cors = require('cors');
 const swaggerUI = require('swagger-ui-express');
 const swaggerJSDoc = require('swagger-jsdoc');
 const path = require('path');
+const SchedulerService = require('./services/scheduler.service');
 
 const isProduction = process.env.NODE_ENV === 'development';
 
@@ -66,6 +67,11 @@ app.use('/', usersRoute);
 
 app.listen(port, () => {
 	console.log(`🚀 Server listening on http://localhost:${port}`);
+
+	// Start scheduled jobs for email notifications
+	if (process.env.ENABLE_EMAIL_SCHEDULER !== 'false') {
+		SchedulerService.startAllJobs();
+	}
 });
 
 module.exports = app;

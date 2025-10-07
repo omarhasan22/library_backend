@@ -12,11 +12,17 @@ const { isAuthenticate } = require('../middlewares/authenticate');
 
 const bookController = require('../controllers/book.controller');
 const BorrowController = require('../controllers/borrow.controller');
+const AuthorController = require('../controllers/author.controller');
+const PublisherController = require('../controllers/publisher.controller');
+const CategoryController = require('../controllers/category.controller');
+const SubjectController = require('../controllers/subject.controller');
 
 // AUTH ROUTES
 router.post('/auth/register', registrationCtrl.register);
 router.post('/auth/login', loginCtrl.login);
 router.post('/auth/refresh', refreshCtrl.refresh);
+router.get('/auth/profile', isAuthenticate, loginCtrl.getProfile);
+router.put('/auth/profile', isAuthenticate, loginCtrl.updateProfile);
 
 // USER CRUD OPERATIONS
 router.post('/users/create', async (req, res) => {
@@ -102,5 +108,47 @@ router.post('/borrows/borrow', isAuthenticate, BorrowController.borrowBook);
 router.put('/borrows/return/:id', isAuthenticate, BorrowController.returnBook);
 router.get('/borrows/borrowed', isAuthenticate, BorrowController.getBorrowedBooks);
 
+// User borrow routes
+router.get('/borrows/my-borrows', isAuthenticate, BorrowController.getMyBorrows);
+
+// Admin borrow routes
+router.get('/borrows/all', isAuthenticate, BorrowController.getAllBorrows);
+router.get('/borrows/user/:userId', isAuthenticate, BorrowController.getUserBorrows);
+router.get('/borrows/overdue', isAuthenticate, BorrowController.getOverdueBooks);
+router.get('/borrows/statistics', isAuthenticate, BorrowController.getBorrowStatistics);
+router.post('/borrows/send-reminders', isAuthenticate, BorrowController.sendDueDateReminders);
+router.post('/borrows/send-overdue-notifications', isAuthenticate, BorrowController.sendOverdueNotifications);
+
+// AUTHOR ROUTES
+router.get('/authors', AuthorController.getAllAuthors);
+router.get('/authors/stats', AuthorController.getAuthorStats);
+router.get('/authors/:id', AuthorController.getAuthorById);
+router.post('/authors', isAuthenticate, AuthorController.createAuthor);
+router.put('/authors/:id', isAuthenticate, AuthorController.updateAuthor);
+router.delete('/authors/:id', isAuthenticate, AuthorController.deleteAuthor);
+
+// PUBLISHER ROUTES
+router.get('/publishers', PublisherController.getAllPublishers);
+router.get('/publishers/stats', PublisherController.getPublisherStats);
+router.get('/publishers/:id', PublisherController.getPublisherById);
+router.post('/publishers', isAuthenticate, PublisherController.createPublisher);
+router.put('/publishers/:id', isAuthenticate, PublisherController.updatePublisher);
+router.delete('/publishers/:id', isAuthenticate, PublisherController.deletePublisher);
+
+// CATEGORY ROUTES
+router.get('/categories', CategoryController.getAllCategories);
+router.get('/categories/stats', CategoryController.getCategoryStats);
+router.get('/categories/:id', CategoryController.getCategoryById);
+router.post('/categories', isAuthenticate, CategoryController.createCategory);
+router.put('/categories/:id', isAuthenticate, CategoryController.updateCategory);
+router.delete('/categories/:id', isAuthenticate, CategoryController.deleteCategory);
+
+// SUBJECT ROUTES
+router.get('/subjects', SubjectController.getAllSubjects);
+router.get('/subjects/stats', SubjectController.getSubjectStats);
+router.get('/subjects/:id', SubjectController.getSubjectById);
+router.post('/subjects', isAuthenticate, SubjectController.createSubject);
+router.put('/subjects/:id', isAuthenticate, SubjectController.updateSubject);
+router.delete('/subjects/:id', isAuthenticate, SubjectController.deleteSubject);
 
 module.exports = router;

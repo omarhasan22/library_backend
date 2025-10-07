@@ -8,7 +8,7 @@ const BorrowSchema = new mongoose.Schema({
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Users',
+    ref: 'User',
     required: true
   },
   startDate: {
@@ -22,6 +22,16 @@ const BorrowSchema = new mongoose.Schema({
   returned: {
     type: Boolean,
     default: false
+  },
+  returnedDate: {
+    type: Date
+  },
+  emailNotificationSent: {
+    type: Boolean,
+    default: false
+  },
+  notificationDate: {
+    type: Date
   }
 }, {
   timestamps: true
