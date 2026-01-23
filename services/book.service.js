@@ -569,6 +569,323 @@ class BookService {
     };
   }
 
+  async exportBooksToExcel(query = '', searchTerm = '', sortDirection = 'asc') {
+    const ExcelJS = require('exceljs');
+    const sortDir = sortDirection === 'desc' ? -1 : 1;
+
+    // Reuse the same lookup and match stages from getAllBooks
+    const lookupStages = [
+      { $lookup: { from: 'authors', localField: 'authors', foreignField: '_id', as: 'authorData' } },
+      { $lookup: { from: 'authors', localField: 'commentators', foreignField: '_id', as: 'commentatorData' } },
+      { $lookup: { from: 'authors', localField: 'editors', foreignField: '_id', as: 'editorData' } },
+      { $lookup: { from: 'authors', localField: 'caretakers', foreignField: '_id', as: 'caretakerData' } },
+      { $lookup: { from: 'authors', localField: 'muhashis', foreignField: '_id', as: 'muhashiData' } },
+      { $lookup: { from: 'publishers', localField: 'publishers', foreignField: '_id', as: 'publisherData' } },
+      { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'categoryData' } },
+      { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subjectData' } }
+    ];
+
+    // Build matchStage (same logic as getAllBooks)
+    const matchStage = [];
+    if (query === 'advanced') {
+      let filters = [];
+      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
+
+      const conditions = filters.map(({ field, value }) => {
+        const normalizedValue = this.normalizeArabicText(value);
+        const pathMap = {
+          title: { path: 'normalizedTitle', useNormalized: true },
+          category: { path: 'categoryData.normalizedTitle', useNormalized: true },
+          subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
+          publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
+          authors: { path: 'authorData.normalizedName', useNormalized: true },
+          editors: { path: 'editorData.normalizedName', useNormalized: true },
+          commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
+          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
+          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
+          roomNumber: { path: 'address.roomNumber', useNormalized: false },
+          shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
+          wallNumber: { path: 'address.wallNumber', useNormalized: false },
+          bookNumber: { path: 'address.bookNumber', useNormalized: false },
+          numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
+          numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
+          editionNumber: { path: 'editionNumber', useNormalized: false },
+          publicationYear: { path: 'publicationYear', useNormalized: false },
+          pageCount: { path: 'pageCount', useNormalized: false },
+          notes: { path: 'notes', useNormalized: false }
+        };
+
+        const cfg = pathMap[field] || { path: field, useNormalized: false };
+        if (cfg.useNormalized) {
+          return { [cfg.path]: normalizedValue };
+        } else {
+          return { [cfg.path]: { $regex: value, $options: 'i' } };
+        }
+      });
+
+      if (conditions.length) matchStage.push({ $match: { $and: conditions } });
+    }
+    else if (searchTerm && String(searchTerm).trim()) {
+      const rawTerm = String(searchTerm).trim();
+      const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
+      const rawEsc = this.escapeRegex(rawTerm);
+      const normEsc = this.escapeRegex(normalizedSearchTerm);
+
+      const pathMap = {
+        title: { path: 'normalizedTitle', useNormalized: true },
+        category: { path: 'categoryData.normalizedTitle', useNormalized: true },
+        subcategory: { path: 'subjectData.normalizedTitle', useNormalized: true },
+        subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
+        publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
+        authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
+        editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
+        commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
+        caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
+        muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
+        roomNumber: { path: 'address.roomNumber', useNormalized: false },
+        shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
+        wallNumber: { path: 'address.wallNumber', useNormalized: false },
+        bookNumber: { path: 'address.bookNumber', useNormalized: false },
+        numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
+        numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
+        editionNumber: { path: 'editionNumber', useNormalized: false },
+        publicationYear: { path: 'publicationYear', useNormalized: false },
+        pageCount: { path: 'pageCount', useNormalized: false },
+        notes: { path: 'notes', useNormalized: false }
+      };
+
+      const fieldConfig = pathMap[query] || null;
+      if (fieldConfig) {
+        if (fieldConfig.isArray) {
+          if (fieldConfig.useNormalized) {
+            matchStage.push({
+              $match: {
+                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
+                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: normEsc, $options: 'i' } }
+                }
+              }
+            });
+          } else {
+            matchStage.push({
+              $match: {
+                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
+                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: rawEsc, $options: 'i' } }
+                }
+              }
+            });
+          }
+        } else {
+          matchStage.push({
+            $match: {
+              [fieldConfig.path]: { $regex: fieldConfig.useNormalized ? normEsc : rawEsc, $options: 'i' }
+            }
+          });
+        }
+      } else {
+        const orConditions = [];
+        ['title', 'category', 'subject', 'subcategory', 'publishers'].forEach(k => {
+          const cfg = pathMap[k];
+          if (!cfg) return;
+          orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
+        });
+        ['authors', 'editors', 'commentators', 'caretakers', 'muhashis'].forEach(k => {
+          const cfg = pathMap[k];
+          if (!cfg) return;
+          const parts = cfg.path.split('.');
+          const parent = parts.slice(0, -1).join('.');
+          const childField = parts.slice(-1)[0];
+          orConditions.push({ [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } });
+        });
+        ['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber', 'notes'].forEach(k => {
+          const cfg = pathMap[k];
+          if (!cfg) return;
+          orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
+        });
+        if (orConditions.length) {
+          matchStage.push({ $match: { $or: orConditions } });
+        }
+      }
+    }
+
+    // Projection stage (same as getAllBooks)
+    const projectStage = {
+      $project: {
+        title: 1,
+        normalizedTitle: 1,
+        numberOfVolumes: 1,
+        numberOfFolders: 1,
+        editionNumber: 1,
+        publicationYear: 1,
+        pageCount: 1,
+        address: 1,
+        imageUrl: 1,
+        authors: '$authorData',
+        commentators: '$commentatorData',
+        editors: '$editorData',
+        caretakers: '$caretakerData',
+        muhashis: '$muhashiData',
+        publishers: '$publisherData',
+        category: { $arrayElemAt: ['$categoryData', 0] },
+        subject: { $arrayElemAt: ['$subjectData', 0] },
+        notes: 1,
+        createdAt: 1,
+        updatedAt: 1
+      }
+    };
+
+    // Sort stage (same as getAllBooks)
+    const sortStage = [
+      {
+        $addFields: {
+          tempRoomNum: { $convert: { input: '$address.roomNumber', to: 'int', onError: null, onNull: null } },
+          tempShelfNum: { $convert: { input: '$address.shelfNumber', to: 'int', onError: null, onNull: null } },
+          tempWallNum: { $convert: { input: '$address.wallNumber', to: 'int', onError: null, onNull: null } },
+          tempBookNum: { $convert: { input: '$address.bookNumber', to: 'int', onError: null, onNull: null } },
+          tempRoomStr: { $trim: { input: { $ifNull: ['$address.roomNumber', ''] } } },
+          tempShelfStr: { $trim: { input: { $ifNull: ['$address.shelfNumber', ''] } } },
+          tempWallStr: { $trim: { input: { $ifNull: ['$address.wallNumber', ''] } } },
+          tempBookStr: { $trim: { input: { $ifNull: ['$address.bookNumber', ''] } } },
+          tempRoomNumFlag: { $cond: [{ $ifNull: ['$tempRoomNum', false] }, 0, 1] },
+          tempShelfNumFlag: { $cond: [{ $ifNull: ['$tempShelfNum', false] }, 0, 1] },
+          tempWallNumFlag: { $cond: [{ $ifNull: ['$tempWallNum', false] }, 0, 1] },
+          tempBookNumFlag: { $cond: [{ $ifNull: ['$tempBookNum', false] }, 0, 1] }
+        }
+      },
+      {
+        $sort: {
+          tempRoomNumFlag: sortDir,
+          tempRoomNum: sortDir,
+          tempRoomStr: sortDir,
+          tempShelfNumFlag: sortDir,
+          tempShelfNum: sortDir,
+          tempShelfStr: sortDir,
+          tempWallNumFlag: sortDir,
+          tempWallNum: sortDir,
+          tempWallStr: sortDir,
+          tempBookNumFlag: sortDir,
+          tempBookNum: sortDir,
+          tempBookStr: sortDir
+        }
+      },
+      {
+        $project: {
+          tempRoomNum: 0, tempShelfNum: 0, tempWallNum: 0, tempBookNum: 0,
+          tempRoomStr: 0, tempShelfStr: 0, tempWallStr: 0, tempBookStr: 0,
+          tempRoomNumFlag: 0, tempShelfNumFlag: 0, tempWallNumFlag: 0, tempBookNumFlag: 0
+        }
+      }
+    ];
+
+    // Build pipeline WITHOUT pagination
+    const pipeline = [
+      ...lookupStages,
+      ...matchStage,
+      projectStage,
+      ...sortStage
+    ];
+
+    // Execute aggregation to get ALL matching books
+    const books = await BookModel.aggregate(pipeline).allowDiskUse(true);
+
+    // Create Excel workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('الكتب', { views: [{ rightToLeft: true }] });
+
+    // Define headers in Arabic
+    const headers = [
+      'العنوان',
+      'المؤلفون',
+      'المحققون',
+      'الشارحون',
+      'من اعتنى بهم',
+      'المحاشي',
+      'التصنيف',
+      'الموضوع',
+      'دور النشر',
+      'عدد الأجزاء',
+      'عدد المجلدات',
+      'رقم الطبعة',
+      'سنة الطباعة',
+      'عدد الصفحات',
+      'رقم الغرفة',
+      'رقم الحائط',
+      'رقم الرف',
+      'رقم الكتاب',
+      'الملاحظات',
+      'تاريخ الإنشاء',
+      'تاريخ التحديث'
+    ];
+
+    // Add headers
+    worksheet.addRow(headers);
+
+    // Style header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, size: 12 };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // Helper function to format array fields
+    const formatArray = (arr, field) => {
+      if (!arr || !Array.isArray(arr) || arr.length === 0) return '';
+      return arr.map(item => item[field] || '').filter(Boolean).join(', ');
+    };
+
+    // Helper function to format date
+    const formatDate = (date) => {
+      if (!date) return '';
+      const d = new Date(date);
+      return d.toLocaleDateString('ar-EG', { year: 'numeric', month: '2-digit', day: '2-digit' });
+    };
+
+    // Add data rows
+    books.forEach(book => {
+      worksheet.addRow([
+        book.title || '',
+        formatArray(book.authors, 'name'),
+        formatArray(book.editors, 'name'),
+        formatArray(book.commentators, 'name'),
+        formatArray(book.caretakers, 'name'),
+        formatArray(book.muhashis, 'name'),
+        book.category?.title || '',
+        book.subject?.title || '',
+        formatArray(book.publishers, 'title'),
+        book.numberOfVolumes || '',
+        book.numberOfFolders || '',
+        book.editionNumber || '',
+        book.publicationYear || '',
+        book.pageCount || '',
+        book.address?.roomNumber || '',
+        book.address?.wallNumber || '',
+        book.address?.shelfNumber || '',
+        book.address?.bookNumber || '',
+        book.notes || '',
+        formatDate(book.createdAt),
+        formatDate(book.updatedAt)
+      ]);
+    });
+
+    // Auto-size columns
+    worksheet.columns.forEach((column, index) => {
+      let maxLength = 10;
+      column.eachCell({ includeEmpty: true }, (cell) => {
+        const cellValue = cell.value ? cell.value.toString() : '';
+        if (cellValue.length > maxLength) {
+          maxLength = cellValue.length;
+        }
+      });
+      column.width = Math.min(Math.max(maxLength + 2, 15), 50);
+    });
+
+    // Generate buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+    return buffer;
+  }
+
   // Fast & light (approximate)
   async getStatistics() {
     const [totalBooks, totalAuthors] = await Promise.all([

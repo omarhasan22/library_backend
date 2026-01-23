@@ -191,6 +191,27 @@ class BookController {
     }
   }
 
+  async exportBooks(req, res) {
+    try {
+      const query = req.query?.query || '';
+      const searchTerm = req.query?.searchTerm || '';
+      const sortDirection = req.query?.sortDirection || 'asc';
+
+      const excelBuffer = await BookService.exportBooksToExcel(query, searchTerm, sortDirection);
+
+      // Set response headers for Excel file download
+      const filename = `books_export_${new Date().toISOString().split('T')[0]}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', excelBuffer.length);
+
+      res.send(excelBuffer);
+    } catch (err) {
+      console.error('Export error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Existing getCategories
   async getCategories(req, res) {
     try {
