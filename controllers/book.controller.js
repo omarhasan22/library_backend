@@ -212,6 +212,42 @@ class BookController {
     }
   }
 
+  async getUniqueRoomNumbers(req, res) {
+    try {
+      const rooms = await BookService.getUniqueRoomNumbers();
+      res.status(200).json(rooms);
+    } catch (err) {
+      console.error('Error getting unique room numbers:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async exportBookLocations(req, res) {
+    try {
+      const roomNumber = req.body?.roomNumber || req.query?.roomNumber;
+      const query = req.body?.query || req.query?.query || '';
+      const searchTerm = req.body?.searchTerm || req.query?.searchTerm || '';
+      const sortDirection = req.body?.sortDirection || req.query?.sortDirection || 'asc';
+
+      if (!roomNumber) {
+        return res.status(400).json({ error: 'Room number is required' });
+      }
+
+      const excelBuffer = await BookService.exportBookLocationsToExcel(roomNumber, query, searchTerm, sortDirection);
+
+      // Set response headers for Excel file download
+      const filename = `books_locations_room_${roomNumber}_${new Date().toISOString().split('T')[0]}.xlsx`;
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.setHeader('Content-Length', excelBuffer.length);
+
+      res.send(excelBuffer);
+    } catch (err) {
+      console.error('Export locations error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   // Existing getCategories
   async getCategories(req, res) {
     try {

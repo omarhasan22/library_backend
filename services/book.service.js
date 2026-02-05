@@ -241,17 +241,19 @@ class BookService {
 
       const conditions = filters.map(({ field, value }) => {
         const normalizedValue = this.normalizeArabicText(value);
+        const normEsc = this.escapeRegex(normalizedValue);
+        const rawEsc = this.escapeRegex(value);
         const pathMap = {
           title: { path: 'normalizedTitle', useNormalized: true },
           category: { path: 'categoryData.normalizedTitle', useNormalized: true },
           subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
           publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
 
-          authors: { path: 'authorData.normalizedName', useNormalized: true },
-          editors: { path: 'editorData.normalizedName', useNormalized: true },
-          commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
-          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
-          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
+          authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
+          editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
+          commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
+          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
+          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
 
           roomNumber: { path: 'address.roomNumber', useNormalized: false },
           shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
@@ -268,10 +270,32 @@ class BookService {
 
         const cfg = pathMap[field] || { path: field, useNormalized: false };
 
-        if (cfg.useNormalized) {
-          return { [cfg.path]: normalizedValue };
-        } else {
-          return { [cfg.path]: { $regex: value, $options: 'i' } };
+        // Handle array fields with $elemMatch
+        if (cfg.isArray) {
+          const parts = cfg.path.split('.');
+          const parent = parts.slice(0, -1).join('.');
+          const childField = parts.slice(-1)[0];
+          if (cfg.useNormalized) {
+            return { [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } };
+          } else {
+            return { [parent]: { $elemMatch: { [childField]: { $regex: rawEsc, $options: 'i' } } } };
+          }
+        }
+        // Handle normalized text fields with regex partial matching
+        else if (cfg.useNormalized) {
+          return { [cfg.path]: { $regex: normEsc, $options: 'i' } };
+        }
+        // Handle numeric fields with exact match (no change)
+        else if (['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].includes(field)) {
+          const numValue = Number(value);
+          if (!isNaN(numValue)) {
+            return { [cfg.path]: numValue };
+          }
+          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
+        }
+        // Handle other non-normalized text fields with regex
+        else {
+          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
         }
       });
 
@@ -593,16 +617,18 @@ class BookService {
 
       const conditions = filters.map(({ field, value }) => {
         const normalizedValue = this.normalizeArabicText(value);
+        const normEsc = this.escapeRegex(normalizedValue);
+        const rawEsc = this.escapeRegex(value);
         const pathMap = {
           title: { path: 'normalizedTitle', useNormalized: true },
           category: { path: 'categoryData.normalizedTitle', useNormalized: true },
           subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
           publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
-          authors: { path: 'authorData.normalizedName', useNormalized: true },
-          editors: { path: 'editorData.normalizedName', useNormalized: true },
-          commentators: { path: 'commentatorData.normalizedName', useNormalized: true },
-          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true },
-          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true },
+          authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
+          editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
+          commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
+          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
+          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
           roomNumber: { path: 'address.roomNumber', useNormalized: false },
           shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
           wallNumber: { path: 'address.wallNumber', useNormalized: false },
@@ -616,10 +642,33 @@ class BookService {
         };
 
         const cfg = pathMap[field] || { path: field, useNormalized: false };
-        if (cfg.useNormalized) {
-          return { [cfg.path]: normalizedValue };
-        } else {
-          return { [cfg.path]: { $regex: value, $options: 'i' } };
+
+        // Handle array fields with $elemMatch
+        if (cfg.isArray) {
+          const parts = cfg.path.split('.');
+          const parent = parts.slice(0, -1).join('.');
+          const childField = parts.slice(-1)[0];
+          if (cfg.useNormalized) {
+            return { [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } };
+          } else {
+            return { [parent]: { $elemMatch: { [childField]: { $regex: rawEsc, $options: 'i' } } } };
+          }
+        }
+        // Handle normalized text fields with regex partial matching
+        else if (cfg.useNormalized) {
+          return { [cfg.path]: { $regex: normEsc, $options: 'i' } };
+        }
+        // Handle numeric fields with exact match (no change)
+        else if (['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].includes(field)) {
+          const numValue = Number(value);
+          if (!isNaN(numValue)) {
+            return { [cfg.path]: numValue };
+          }
+          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
+        }
+        // Handle other non-normalized text fields with regex
+        else {
+          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
         }
       });
 
@@ -884,6 +933,248 @@ class BookService {
     // Generate buffer
     const buffer = await workbook.xlsx.writeBuffer();
     return buffer;
+  }
+
+  async exportBookLocationsToExcel(roomNumber, query = '', searchTerm = '', sortDirection = 'asc') {
+    const ExcelJS = require('exceljs');
+
+    if (!roomNumber) {
+      throw new Error('Room number is required for locations export');
+    }
+
+    // Lookup stages for subject and category (must come before match stages that reference them)
+    const lookupStages = [
+      {
+        $lookup: {
+          from: 'subjects',
+          localField: 'subject',
+          foreignField: '_id',
+          as: 'subject'
+        }
+      },
+      {
+        $lookup: {
+          from: 'categories',
+          localField: 'category',
+          foreignField: '_id',
+          as: 'category'
+        }
+      }
+    ];
+
+    // Build matchStage for additional filters (reuse logic from exportBooksToExcel)
+    // First, apply room number filter
+    const matchStage = [{ $match: { "address.roomNumber": String(roomNumber) } }];
+
+    // Then apply additional filters if provided (after lookups)
+    if (query === 'advanced') {
+      let filters = [];
+      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
+
+      // Filter out roomNumber from additional filters since we already applied it
+      const additionalFilters = filters.filter(f => f.field !== 'roomNumber');
+
+      if (additionalFilters.length > 0) {
+        const conditions = additionalFilters.map(({ field, value }) => {
+          const normalizedValue = this.normalizeArabicText(value);
+          const normEsc = this.escapeRegex(normalizedValue);
+          const rawEsc = this.escapeRegex(value);
+          // For locations export, only use direct Book fields (no lookups needed for filtering)
+          const pathMap = {
+            title: { path: 'normalizedTitle', useNormalized: true },
+            shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
+            wallNumber: { path: 'address.wallNumber', useNormalized: false },
+            bookNumber: { path: 'address.bookNumber', useNormalized: false },
+            numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
+            numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
+            editionNumber: { path: 'editionNumber', useNormalized: false },
+            publicationYear: { path: 'publicationYear', useNormalized: false },
+            pageCount: { path: 'pageCount', useNormalized: false },
+            notes: { path: 'notes', useNormalized: false }
+          };
+
+          const cfg = pathMap[field];
+          if (!cfg) return null; // Skip fields not in pathMap
+
+          if (cfg.useNormalized) {
+            return { [cfg.path]: { $regex: normEsc, $options: 'i' } };
+          } else if (['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].includes(field)) {
+            const numValue = Number(value);
+            if (!isNaN(numValue)) {
+              return { [cfg.path]: numValue };
+            }
+            return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
+          } else {
+            return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
+          }
+        }).filter(c => c !== null); // Remove null conditions
+
+        if (conditions.length) {
+          matchStage.push({ $match: { $and: conditions } });
+        }
+      }
+    } else if (searchTerm && String(searchTerm).trim()) {
+      // Simple search - apply additional filters but exclude roomNumber
+      const rawTerm = String(searchTerm).trim();
+      const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
+      const rawEsc = this.escapeRegex(rawTerm);
+      const normEsc = this.escapeRegex(normalizedSearchTerm);
+
+      const orConditions = [];
+      // For simple search in locations export, only search in title and address fields
+      orConditions.push({ normalizedTitle: { $regex: normEsc, $options: 'i' } });
+      orConditions.push({ 'address.shelfNumber': { $regex: rawEsc, $options: 'i' } });
+      orConditions.push({ 'address.wallNumber': { $regex: rawEsc, $options: 'i' } });
+      orConditions.push({ 'address.bookNumber': { $regex: rawEsc, $options: 'i' } });
+      orConditions.push({ notes: { $regex: rawEsc, $options: 'i' } });
+      if (orConditions.length) {
+        matchStage.push({ $match: { $or: orConditions } });
+      }
+    }
+
+    // Projection stage
+    const projectStage = {
+      $project: {
+        title: 1,
+        roomNumber: "$address.roomNumber",
+        wallNumber: "$address.wallNumber",
+        shelfNumber: "$address.shelfNumber",
+        bookNumber: "$address.bookNumber",
+        numberOfFolders: 1,
+        folder: {
+          $cond: [
+            { $gt: ["$numberOfFolders", 1] },
+            { $range: [1, { $add: ["$numberOfFolders", 1] }] },
+            "$$REMOVE"
+          ]
+        },
+        categoryAndSubject: {
+          $concat: [
+            { $ifNull: [{ $first: "$subject.title" }, ""] }
+          ]
+        }
+      }
+    };
+
+    // Unwind folders
+    const unwindStage = {
+      $unwind: {
+        path: "$folder",
+        preserveNullAndEmptyArrays: true
+      }
+    };
+
+    // Build pipeline
+    // Order: room filter first (for performance), then lookups, then additional filters, then project, then unwind
+    const roomFilter = matchStage[0]; // First match is room filter
+    const additionalFilters = matchStage.slice(1); // Rest are additional filters
+
+    const pipeline = [
+      roomFilter, // Apply room filter first for performance
+      ...lookupStages, // Then do lookups
+      ...additionalFilters, // Then apply additional filters (if any)
+      projectStage,
+      unwindStage
+    ];
+
+    // Execute aggregation
+    const rows = await BookModel.aggregate(pipeline).allowDiskUse(true);
+
+    // Create Excel workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Book locations', { views: [{ rightToLeft: true }] });
+
+    // Define headers in Arabic
+    const headers = [
+      'العنوان',
+      'الفئة - الموضوع',
+      'الغرفة',
+      'الحائط',
+      'الرف',
+      'رقم الكتاب',
+      'المجلد'
+    ];
+
+    // Add headers
+    worksheet.addRow(headers);
+
+    // Style header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, size: 12 };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF4472C4' }
+    };
+    headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    // Column indices for numeric columns
+    const roomNumberCol = 3; // الغرفة
+    const wallNumberCol = 4;  // الحائط
+    const shelfNumberCol = 5; // الرف
+    const bookNumberCol = 6;  // رقم الكتاب
+    const folderCol = 7;      // المجلد
+
+    // Add data rows with proper number formatting
+    rows.forEach((r, index) => {
+      const row = worksheet.addRow([
+        r.title || '',
+        r.categoryAndSubject || '',
+        r.roomNumber || '',
+        r.wallNumber || '',
+        r.shelfNumber || '',
+        r.bookNumber || '',
+        r.folder || ''
+      ]);
+
+      // Format numeric columns
+      [roomNumberCol, wallNumberCol, shelfNumberCol, bookNumberCol, folderCol].forEach(colIndex => {
+        const cell = row.getCell(colIndex);
+        const value = cell.value;
+        if (value !== null && value !== undefined && value !== '') {
+          const numValue = Number(value);
+          if (!isNaN(numValue)) {
+            cell.value = numValue;
+            cell.numFmt = '0'; // Integer format
+          }
+        }
+      });
+    });
+
+    // Auto column widths
+    worksheet.columns.forEach((col) => {
+      let max = 10;
+      col.eachCell({ includeEmpty: true }, (cell) => {
+        const len = (cell.value || '').toString().length;
+        if (len > max) max = len;
+      });
+      col.width = Math.min(Math.max(max + 2, 15), 120);
+    });
+
+    // Generate buffer
+    const buffer = await workbook.xlsx.writeBuffer();
+    return buffer;
+  }
+
+  // Get unique room numbers for dropdown selector
+  async getUniqueRoomNumbers() {
+    try {
+      const rooms = await BookModel.distinct('address.roomNumber');
+      // Filter out null/empty values and sort
+      const filteredRooms = rooms.filter(r => r != null && r !== '').map(r => String(r));
+      // Sort: numeric values first (as numbers), then string values
+      return filteredRooms.sort((a, b) => {
+        const numA = Number(a);
+        const numB = Number(b);
+        if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+        if (!isNaN(numA)) return -1;
+        if (!isNaN(numB)) return 1;
+        return String(a).localeCompare(String(b));
+      });
+    } catch (err) {
+      console.error('Error getting unique room numbers:', err);
+      throw err;
+    }
   }
 
   // Fast & light (approximate)
