@@ -9,6 +9,10 @@ const subject = mongoose.Schema({
       type: String,
       required: false
    }
-})
+});
+
+// Index for Subject model
+subject.index({ normalizedTitle: 1 });
+
 // Export the author model
 module.exports = mongoose.model('Subject', subject);

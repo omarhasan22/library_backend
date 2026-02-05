@@ -37,4 +37,14 @@ const BorrowSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Indexes for Borrow model
+BorrowSchema.index({ book: 1 });
+BorrowSchema.index({ user: 1 });
+BorrowSchema.index({ returned: 1 });
+BorrowSchema.index({ endDate: 1 });
+BorrowSchema.index({ book: 1, returned: 1 }); // Compound for checking if book is borrowed
+BorrowSchema.index({ user: 1, returned: 1 }); // Compound for user borrows
+BorrowSchema.index({ returned: 1, endDate: 1 }); // Compound for overdue queries
+BorrowSchema.index({ returned: 1, endDate: 1, emailNotificationSent: 1 }); // Compound for reminders
+
 module.exports = mongoose.model('Borrow', BorrowSchema);

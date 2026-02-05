@@ -11,4 +11,7 @@ const publisherSchema = new mongoose.Schema({
    }
 });
 
+// Index for Publisher model
+publisherSchema.index({ normalizedTitle: 1 });
+
 module.exports = mongoose.model('Publisher', publisherSchema);

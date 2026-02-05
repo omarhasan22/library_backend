@@ -13,4 +13,7 @@ const category = mongoose.Schema({
    }
 });
 
+// Index for Category model
+category.index({ normalizedTitle: 1 });
+
 module.exports = mongoose.model('Category', category);

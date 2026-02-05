@@ -31,4 +31,9 @@ const authorSchema = new mongoose.Schema({
   }
 });
 
+// Indexes for Author model
+authorSchema.index({ normalizedName: 1 });
+authorSchema.index({ type: 1 });
+authorSchema.index({ normalizedName: 1, type: 1 }); // Compound for findOne queries
+
 module.exports = mongoose.model('Author', authorSchema);

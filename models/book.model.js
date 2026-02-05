@@ -114,4 +114,22 @@ const BookSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Single field indexes
+BookSchema.index({ normalizedTitle: 1 });
+BookSchema.index({ category: 1 });
+BookSchema.index({ subject: 1 });
+BookSchema.index({ publicationYear: 1 });
+BookSchema.index({ 'address.roomNumber': 1 });
+BookSchema.index({ 'address.shelfNumber': 1 });
+BookSchema.index({ 'address.wallNumber': 1 });
+BookSchema.index({ 'address.bookNumber': 1 });
+
+// Array field indexes (for $in queries)
+BookSchema.index({ authors: 1 });
+BookSchema.index({ publishers: 1 });
+
+// Compound indexes for common query patterns
+BookSchema.index({ category: 1, subject: 1 });
+BookSchema.index({ normalizedTitle: 1, category: 1 });
+
 module.exports = mongoose.model('Book', BookSchema);
