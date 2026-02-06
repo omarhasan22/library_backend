@@ -296,11 +296,44 @@ class BookController {
     }
   }
 
-  // Existing getPublishers
+  // Existing getPublishers - now supports both simple array and pagination
   async getPublishers(req, res) {
     try {
-      const publishers = await BookService.getPublishers();
-      res.status(200).json(publishers);
+      const { page = 1, limit = 10, search = '', isPagination } = req.query;
+      const Publisher = require('../models/publisher.model');
+      const query = {};
+
+      if (search) {
+        query.$or = [
+          { title: { $regex: search, $options: 'i' } },
+          { normalizedTitle: { $regex: search, $options: 'i' } }
+        ];
+      }
+
+      // Check if pagination is requested
+      const usePagination = isPagination === 'true' || isPagination === true;
+
+      if (usePagination) {
+        // Return paginated response (for dashboard)
+        const publishers = await Publisher.find(query)
+          .sort({ title: 1 })
+          .limit(limit * 1)
+          .skip((page - 1) * limit)
+          .exec();
+
+        const total = await Publisher.countDocuments(query);
+
+        res.json({
+          publishers,
+          totalPages: Math.ceil(total / limit),
+          currentPage: page,
+          total
+        });
+      } else {
+        // Return simple array (for book forms - existing behavior)
+        const publishers = await BookService.getPublishers();
+        res.status(200).json(publishers);
+      }
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

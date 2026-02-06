@@ -1088,6 +1088,7 @@ class BookService {
     const headers = [
       'العنوان',
       'الفئة - الموضوع',
+      'الموقع',
       'الغرفة',
       'الحائط',
       'الرف',
@@ -1108,18 +1109,35 @@ class BookService {
     };
     headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
 
-    // Column indices for numeric columns
-    const roomNumberCol = 3; // الغرفة
-    const wallNumberCol = 4;  // الحائط
-    const shelfNumberCol = 5; // الرف
-    const bookNumberCol = 6;  // رقم الكتاب
-    const folderCol = 7;      // المجلد
+    // Column indices for numeric columns (updated after adding merged column)
+    const locationMergedCol = 3; // الموقع (merged)
+    const roomNumberCol = 4; // الغرفة
+    const wallNumberCol = 5;  // الحائط
+    const shelfNumberCol = 6; // الرف
+    const bookNumberCol = 7;  // رقم الكتاب
+    const folderCol = 8;      // المجلد
 
-    // Add data rows with proper number formatting
+    // Add data rows with merged location and separate columns
     rows.forEach((r, index) => {
+      // Build merged location string: room-wall-shelf-book, folder
+      const locationParts = [
+        r.roomNumber || '',
+        r.wallNumber || '',
+        r.shelfNumber || '',
+        r.bookNumber || ''
+      ].filter(part => part !== ''); // Remove empty parts
+
+      let locationString = locationParts.join('.');
+
+      // Add folder after comma if it exists
+      if (r.folder !== null && r.folder !== undefined && r.folder !== '') {
+        locationString += `, ${r.folder}`;
+      }
+
       const row = worksheet.addRow([
         r.title || '',
         r.categoryAndSubject || '',
+        locationString, // Merged location column
         r.roomNumber || '',
         r.wallNumber || '',
         r.shelfNumber || '',
@@ -1127,7 +1145,7 @@ class BookService {
         r.folder || ''
       ]);
 
-      // Format numeric columns
+      // Format numeric columns (skip the merged location column)
       [roomNumberCol, wallNumberCol, shelfNumberCol, bookNumberCol, folderCol].forEach(colIndex => {
         const cell = row.getCell(colIndex);
         const value = cell.value;

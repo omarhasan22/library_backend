@@ -130,11 +130,12 @@ router.post('/authors', isAuthenticate, AuthorController.createAuthor);
 router.put('/authors/:id', isAuthenticate, AuthorController.updateAuthor);
 router.delete('/authors/:id', isAuthenticate, AuthorController.deleteAuthor);
 
-// PUBLISHER ROUTES
-router.get('/publishers', PublisherController.getAllPublishers);
+// PUBLISHER ROUTES (Dashboard/Admin routes)
+// GET /publishers is handled by bookController.getPublishers with isPagination parameter
 router.get('/publishers/stats', PublisherController.getPublisherStats);
 router.get('/publishers/:id', PublisherController.getPublisherById);
-router.post('/publishers', isAuthenticate, PublisherController.createPublisher);
+// POST /publishers is handled by bookController.createPublisher (line 102) for backward compatibility
+// For authenticated admin operations, use PublisherController methods
 router.put('/publishers/:id', isAuthenticate, PublisherController.updatePublisher);
 router.delete('/publishers/:id', isAuthenticate, PublisherController.deletePublisher);
 
