@@ -93,10 +93,10 @@ const BookSchema = new mongoose.Schema({
   },
 
   address: {
-    roomNumber: { type: String, trim: true, required: true },
-    shelfNumber: { type: String, trim: true, required: true },
-    wallNumber: { type: String, trim: true, required: true },
-    bookNumber: { type: String, trim: true, required: true }
+    roomNumber: { type: String, trim: true, required: false },
+    shelfNumber: { type: String, trim: true, required: false },
+    wallNumber: { type: String, trim: true, required: false },
+    bookNumber: { type: String, trim: true, required: false }
   },
 
   // مسار صورة الغلاف
