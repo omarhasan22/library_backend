@@ -222,6 +222,139 @@ class BookController {
     }
   }
 
+  async getUniqueWallNumbers(req, res) {
+    try {
+      const roomNumber = req.query.roomNumber || req.params.roomNumber;
+      if (!roomNumber) {
+        return res.status(400).json({ error: 'Room number is required' });
+      }
+      const walls = await BookService.getUniqueWallNumbers(roomNumber);
+      res.status(200).json(walls);
+    } catch (err) {
+      console.error('Error getting unique wall numbers:', err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+
+  async bulkUpdateSubjects(req, res) {
+    try {
+      const {
+        roomNumber,
+        wallNumber,
+        shelfNumber,
+        bookNumberFrom,
+        bookNumberTo,
+        subjectId
+      } = req.body;
+
+      // Get user ID from authenticated request
+      const userId = req.user ? req.user._id : null;
+      if (!userId) {
+        return res.status(401).json({ error: 'User authentication required' });
+      }
+
+      const criteria = {
+        roomNumber,
+        wallNumber,
+        shelfNumber,
+        bookNumberFrom,
+        bookNumberTo
+      };
+
+      const result = await BookService.bulkUpdateSubjects(criteria, subjectId, userId);
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('Error in bulk update subjects:', err);
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async bulkUpdateCategories(req, res) {
+    try {
+      const {
+        roomNumber,
+        wallNumber,
+        shelfNumber,
+        bookNumberFrom,
+        bookNumberTo,
+        categoryId
+      } = req.body;
+
+      // Get user ID from authenticated request
+      const userId = req.user ? req.user._id : null;
+      if (!userId) {
+        return res.status(401).json({ error: 'User authentication required' });
+      }
+
+      const criteria = {
+        roomNumber,
+        wallNumber,
+        shelfNumber,
+        bookNumberFrom,
+        bookNumberTo
+      };
+
+      const result = await BookService.bulkUpdateCategories(criteria, categoryId, userId);
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('Error in bulk update categories:', err);
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async undoBulkUpdateSubjects(req, res) {
+    try {
+      const { historyId } = req.body;
+
+      if (!historyId) {
+        return res.status(400).json({ error: 'History ID is required' });
+      }
+
+      const result = await BookService.undoBulkUpdateSubjects(historyId);
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('Error in undo bulk update subjects:', err);
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getBulkUpdateHistory(req, res) {
+    try {
+      const { page = 1, limit = 10 } = req.query;
+      const userId = req.user ? req.user._id : null;
+
+      // If user is not admin, only show their own history
+      // If admin, can see all history (pass null to service)
+      const filterUserId = req.user && req.user.role === 'admin' ? null : userId;
+
+      const result = await BookService.getBulkUpdateHistory(
+        filterUserId,
+        parseInt(page),
+        parseInt(limit)
+      );
+      res.status(200).json(result);
+    } catch (err) {
+      console.error('Error getting bulk update history:', err);
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  async getHistoryById(req, res) {
+    try {
+      const { id } = req.params;
+
+      if (!id) {
+        return res.status(400).json({ error: 'History ID is required' });
+      }
+
+      const history = await BookService.getHistoryById(id);
+      res.status(200).json(history);
+    } catch (err) {
+      console.error('Error getting history by ID:', err);
+      res.status(400).json({ error: err.message });
+    }
+  }
+
   async exportBookLocations(req, res) {
     try {
       const roomNumber = req.body?.roomNumber || req.query?.roomNumber;

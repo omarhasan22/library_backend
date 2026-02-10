@@ -1,9 +1,12 @@
 const mongoose = require('mongoose');
+const path = require('path');
+const fs = require('fs');
 const BookModel = require('../models/book.model');
 const Category = require('../models/category.model');
 const Subject = require('../models/subject.model');
 const Author = require('../models/author.model'); // This is your 'Person' model for authors, commentators, etc.
 const Publisher = require('../models/publisher.model');
+const BulkUpdateHistory = require('../models/bulk-update-history.model');
 
 class BookService {
 
@@ -1191,6 +1194,561 @@ class BookService {
       });
     } catch (err) {
       console.error('Error getting unique room numbers:', err);
+      throw err;
+    }
+  }
+
+  // Get unique wall numbers for a specific room
+  async getUniqueWallNumbers(roomNumber) {
+    try {
+      if (!roomNumber) {
+        return [];
+      }
+      const walls = await BookModel.distinct('address.wallNumber', {
+        'address.roomNumber': roomNumber
+      });
+      // Filter out null/empty values and sort
+      const filteredWalls = walls.filter(w => w != null && w !== '').map(w => String(w));
+      return filteredWalls.sort((a, b) => {
+        const numA = Number(a);
+        const numB = Number(b);
+        if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+        if (!isNaN(numA)) return -1;
+        if (!isNaN(numB)) return 1;
+        return String(a).localeCompare(String(b));
+      });
+    } catch (err) {
+      console.error('Error getting unique wall numbers:', err);
+      throw err;
+    }
+  }
+
+  // Bulk update subjects for books matching criteria
+  async bulkUpdateSubjects(criteria, subjectId, userId) {
+    let booksToRestore = [];
+    try {
+      // Validate required fields
+      if (!criteria.shelfNumber) {
+        throw new Error('Shelf number is required');
+      }
+      if (criteria.bookNumberFrom === undefined || criteria.bookNumberTo === undefined) {
+        throw new Error('Book number range (from and to) is required');
+      }
+      if (!subjectId) {
+        throw new Error('Subject ID is required');
+      }
+      if (!userId) {
+        throw new Error('User ID is required');
+      }
+
+      // Validate subject exists
+      const subject = await Subject.findById(subjectId);
+      if (!subject) {
+        throw new Error('Subject not found');
+      }
+
+      // Add book number range filter
+      const bookNumberFrom = parseInt(criteria.bookNumberFrom, 10);
+      const bookNumberTo = parseInt(criteria.bookNumberTo, 10);
+
+      if (isNaN(bookNumberFrom) || isNaN(bookNumberTo)) {
+        throw new Error('Book number range must be valid numbers');
+      }
+
+      if (bookNumberFrom > bookNumberTo) {
+        throw new Error('Book number "from" must be less than or equal to "to"');
+      }
+
+      // Build query with $and to combine all conditions
+      const queryConditions = [
+        { 'address.shelfNumber': String(criteria.shelfNumber) }
+      ];
+
+      // Add optional filters
+      if (criteria.roomNumber) {
+        queryConditions.push({ 'address.roomNumber': criteria.roomNumber });
+      }
+      if (criteria.wallNumber) {
+        queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
+      }
+
+      // Add book number range filter - handle both string and numeric values
+      queryConditions.push({
+        $or: [
+          {
+            'address.bookNumber': {
+              $gte: String(bookNumberFrom),
+              $lte: String(bookNumberTo)
+            }
+          },
+          {
+            'address.bookNumber': {
+              $gte: bookNumberFrom,
+              $lte: bookNumberTo
+            }
+          }
+        ]
+      });
+
+      const query = { $and: queryConditions };
+
+      // Store previous subject states before updating (for undo)
+      // Also fetch book titles for history
+      const booksBeforeUpdate = await BookModel.find(query).select('_id subject title').lean();
+      booksToRestore = booksBeforeUpdate.map(book => ({
+        bookId: book._id.toString(),
+        previousSubjectId: book.subject ? book.subject.toString() : null
+      }));
+
+      // Get old subject information (most common subject or first book's subject)
+      let oldSubject = null;
+      if (booksBeforeUpdate.length > 0) {
+        // Find the most common previous subject
+        const subjectCounts = {};
+        booksBeforeUpdate.forEach(book => {
+          if (book.subject) {
+            const subjId = book.subject.toString();
+            subjectCounts[subjId] = (subjectCounts[subjId] || 0) + 1;
+          }
+        });
+
+        // Get the most common subject ID
+        let mostCommonSubjectId = null;
+        let maxCount = 0;
+        Object.keys(subjectCounts).forEach(subjId => {
+          if (subjectCounts[subjId] > maxCount) {
+            maxCount = subjectCounts[subjId];
+            mostCommonSubjectId = subjId;
+          }
+        });
+
+        // If no common subject, use first book's subject
+        if (!mostCommonSubjectId && booksBeforeUpdate[0].subject) {
+          mostCommonSubjectId = booksBeforeUpdate[0].subject.toString();
+        }
+
+        if (mostCommonSubjectId) {
+          const oldSubjectDoc = await Subject.findById(mostCommonSubjectId);
+          if (oldSubjectDoc) {
+            oldSubject = {
+              _id: oldSubjectDoc._id,
+              title: oldSubjectDoc.title
+            };
+          }
+        }
+      }
+
+      // Count matching books before update
+      const countBefore = await BookModel.countDocuments(query);
+
+      // Perform bulk update
+      const updateResult = await BookModel.updateMany(
+        query,
+        { $set: { subject: subjectId } }
+      );
+
+      const modifiedCount = updateResult.modifiedCount || updateResult.nModified || 0;
+
+      // Generate unique update ID
+      const updateId = new mongoose.Types.ObjectId().toString();
+
+      // Prepare affected books array with titles
+      const affectedBooks = booksBeforeUpdate.map(book => ({
+        bookId: book._id,
+        bookTitle: book.title || 'Untitled',
+        previousSubjectId: book.subject || null
+      }));
+
+      // Create history record
+      const historyRecord = new BulkUpdateHistory({
+        updateId: updateId,
+        userId: userId,
+        updateType: 'subject',
+        criteria: {
+          roomNumber: criteria.roomNumber || undefined,
+          wallNumber: criteria.wallNumber || undefined,
+          shelfNumber: criteria.shelfNumber,
+          bookNumberFrom: bookNumberFrom,
+          bookNumberTo: bookNumberTo
+        },
+        oldSubject: oldSubject || { _id: null, title: null },
+        newSubject: {
+          _id: subject._id,
+          title: subject.title
+        },
+        affectedBooks: affectedBooks,
+        status: 'active'
+      });
+
+      const savedHistory = await historyRecord.save();
+
+      return {
+        matchedCount: countBefore,
+        modifiedCount: modifiedCount,
+        subject: {
+          _id: subject._id,
+          title: subject.title
+        },
+        historyId: savedHistory._id.toString(),
+        undoData: {
+          updateId: updateId,
+          books: booksToRestore,
+          timestamp: new Date()
+        }
+      };
+    } catch (err) {
+      console.error('Error in bulk update subjects:', err);
+
+      // Automatic rollback on error
+      if (booksToRestore.length > 0) {
+        try {
+          console.log('Attempting automatic rollback...');
+          await this.restoreSubjects(booksToRestore);
+          console.log('Automatic rollback completed successfully');
+        } catch (rollbackErr) {
+          console.error('Error during automatic rollback:', rollbackErr);
+          throw new Error(`Update failed and rollback also failed: ${err.message}. Rollback error: ${rollbackErr.message}`);
+        }
+      }
+
+      throw err;
+    }
+  }
+
+  // Bulk update categories for books matching criteria
+  async bulkUpdateCategories(criteria, categoryId, userId) {
+    let booksToRestore = [];
+    try {
+      // Validate required fields
+      if (!criteria.shelfNumber) {
+        throw new Error('Shelf number is required');
+      }
+      if (criteria.bookNumberFrom === undefined || criteria.bookNumberTo === undefined) {
+        throw new Error('Book number range (from and to) is required');
+      }
+      if (!categoryId) {
+        throw new Error('Category ID is required');
+      }
+      if (!userId) {
+        throw new Error('User ID is required');
+      }
+
+      // Validate category exists
+      const category = await Category.findById(categoryId);
+      if (!category) {
+        throw new Error('Category not found');
+      }
+
+      // Add book number range filter
+      const bookNumberFrom = parseInt(criteria.bookNumberFrom, 10);
+      const bookNumberTo = parseInt(criteria.bookNumberTo, 10);
+
+      if (isNaN(bookNumberFrom) || isNaN(bookNumberTo)) {
+        throw new Error('Book number range must be valid numbers');
+      }
+
+      if (bookNumberFrom > bookNumberTo) {
+        throw new Error('Book number "from" must be less than or equal to "to"');
+      }
+
+      // Build query with $and to combine all conditions
+      const queryConditions = [
+        { 'address.shelfNumber': String(criteria.shelfNumber) }
+      ];
+
+      // Add optional filters
+      if (criteria.roomNumber) {
+        queryConditions.push({ 'address.roomNumber': criteria.roomNumber });
+      }
+      if (criteria.wallNumber) {
+        queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
+      }
+
+      // Add book number range filter - handle both string and numeric values
+      queryConditions.push({
+        $or: [
+          {
+            'address.bookNumber': {
+              $gte: String(bookNumberFrom),
+              $lte: String(bookNumberTo)
+            }
+          },
+          {
+            'address.bookNumber': {
+              $gte: bookNumberFrom,
+              $lte: bookNumberTo
+            }
+          }
+        ]
+      });
+
+      const query = { $and: queryConditions };
+
+      // Store previous category states before updating (for undo)
+      // Also fetch book titles for history
+      const booksBeforeUpdate = await BookModel.find(query).select('_id category title').lean();
+      booksToRestore = booksBeforeUpdate.map(book => ({
+        bookId: book._id.toString(),
+        previousCategoryId: book.category ? book.category.toString() : null
+      }));
+
+      // Get old category information (most common category or first book's category)
+      let oldCategory = null;
+      if (booksBeforeUpdate.length > 0) {
+        // Find the most common previous category
+        const categoryCounts = {};
+        booksBeforeUpdate.forEach(book => {
+          if (book.category) {
+            const catId = book.category.toString();
+            categoryCounts[catId] = (categoryCounts[catId] || 0) + 1;
+          }
+        });
+
+        // Get the most common category ID
+        let mostCommonCategoryId = null;
+        let maxCount = 0;
+        Object.keys(categoryCounts).forEach(catId => {
+          if (categoryCounts[catId] > maxCount) {
+            maxCount = categoryCounts[catId];
+            mostCommonCategoryId = catId;
+          }
+        });
+
+        // If no common category, use first book's category
+        if (!mostCommonCategoryId && booksBeforeUpdate[0].category) {
+          mostCommonCategoryId = booksBeforeUpdate[0].category.toString();
+        }
+
+        if (mostCommonCategoryId) {
+          const oldCategoryDoc = await Category.findById(mostCommonCategoryId);
+          if (oldCategoryDoc) {
+            oldCategory = {
+              _id: oldCategoryDoc._id,
+              title: oldCategoryDoc.title
+            };
+          }
+        }
+      }
+
+      // Count matching books before update
+      const countBefore = await BookModel.countDocuments(query);
+
+      // Perform bulk update
+      const updateResult = await BookModel.updateMany(
+        query,
+        { $set: { category: categoryId } }
+      );
+
+      const modifiedCount = updateResult.modifiedCount || updateResult.nModified || 0;
+
+      // Generate unique update ID
+      const updateId = new mongoose.Types.ObjectId().toString();
+
+      // Prepare affected books array with titles
+      const affectedBooks = booksBeforeUpdate.map(book => ({
+        bookId: book._id,
+        bookTitle: book.title || 'Untitled',
+        previousCategoryId: book.category || null
+      }));
+
+      // Create history record
+      const historyRecord = new BulkUpdateHistory({
+        updateId: updateId,
+        userId: userId,
+        updateType: 'category',
+        criteria: {
+          roomNumber: criteria.roomNumber || undefined,
+          wallNumber: criteria.wallNumber || undefined,
+          shelfNumber: criteria.shelfNumber,
+          bookNumberFrom: bookNumberFrom,
+          bookNumberTo: bookNumberTo
+        },
+        oldCategory: oldCategory || { _id: null, title: null },
+        newCategory: {
+          _id: category._id,
+          title: category.title
+        },
+        affectedBooks: affectedBooks,
+        status: 'active'
+      });
+
+      const savedHistory = await historyRecord.save();
+
+      return {
+        matchedCount: countBefore,
+        modifiedCount: modifiedCount,
+        category: {
+          _id: category._id,
+          title: category.title
+        },
+        historyId: savedHistory._id.toString(),
+        undoData: {
+          updateId: updateId,
+          books: booksToRestore,
+          timestamp: new Date()
+        }
+      };
+    } catch (err) {
+      console.error('Error in bulk update categories:', err);
+
+      // Automatic rollback on error
+      if (booksToRestore.length > 0) {
+        try {
+          console.log('Attempting automatic rollback...');
+          await this.restoreCategories(booksToRestore);
+          console.log('Automatic rollback completed successfully');
+        } catch (rollbackErr) {
+          console.error('Error during automatic rollback:', rollbackErr);
+          throw new Error(`Update failed and rollback also failed: ${err.message}. Rollback error: ${rollbackErr.message}`);
+        }
+      }
+
+      throw err;
+    }
+  }
+
+  // Helper method to restore subjects
+  async restoreSubjects(booksToRestore) {
+    try {
+      const bulkOps = booksToRestore.map(({ bookId, previousSubjectId }) => ({
+        updateOne: {
+          filter: { _id: new mongoose.Types.ObjectId(bookId) },
+          update: { $set: { subject: previousSubjectId || null } }
+        }
+      }));
+
+      if (bulkOps.length > 0) {
+        await BookModel.bulkWrite(bulkOps);
+      }
+    } catch (err) {
+      console.error('Error restoring subjects:', err);
+      throw err;
+    }
+  }
+
+  // Helper method to restore categories
+  async restoreCategories(booksToRestore) {
+    try {
+      const bulkOps = booksToRestore.map(({ bookId, previousCategoryId }) => ({
+        updateOne: {
+          filter: { _id: new mongoose.Types.ObjectId(bookId) },
+          update: { $set: { category: previousCategoryId || null } }
+        }
+      }));
+
+      if (bulkOps.length > 0) {
+        await BookModel.bulkWrite(bulkOps);
+      }
+    } catch (err) {
+      console.error('Error restoring categories:', err);
+      throw err;
+    }
+  }
+
+  // Undo bulk update subjects
+  async undoBulkUpdateSubjects(historyId) {
+    try {
+      if (!historyId) {
+        throw new Error('History ID is required');
+      }
+
+      // Fetch history record
+      const historyRecord = await BulkUpdateHistory.findById(historyId);
+      if (!historyRecord) {
+        throw new Error('History record not found');
+      }
+
+      if (historyRecord.status === 'undone') {
+        throw new Error('This update has already been undone');
+      }
+
+      // Prepare books to restore based on update type
+      let booksToRestore = [];
+      if (historyRecord.updateType === 'subject') {
+        booksToRestore = historyRecord.affectedBooks.map(({ bookId, previousSubjectId }) => ({
+          bookId: bookId.toString(),
+          previousSubjectId: previousSubjectId ? previousSubjectId.toString() : null
+        }));
+        // Restore subjects
+        await this.restoreSubjects(booksToRestore);
+      } else if (historyRecord.updateType === 'category') {
+        booksToRestore = historyRecord.affectedBooks.map(({ bookId, previousCategoryId }) => ({
+          bookId: bookId.toString(),
+          previousCategoryId: previousCategoryId ? previousCategoryId.toString() : null
+        }));
+        // Restore categories
+        await this.restoreCategories(booksToRestore);
+      } else {
+        throw new Error('Invalid update type in history record');
+      }
+
+      // Update history record status
+      historyRecord.status = 'undone';
+      historyRecord.undoneAt = new Date();
+      await historyRecord.save();
+
+      return {
+        success: true,
+        restoredCount: booksToRestore.length
+      };
+    } catch (err) {
+      console.error('Error in undo bulk update subjects:', err);
+      throw err;
+    }
+  }
+
+  // Get bulk update history
+  async getBulkUpdateHistory(userId, page = 1, limit = 10) {
+    try {
+      const query = {};
+
+      // Filter by userId if provided (admin can see all, users see only their own)
+      if (userId) {
+        query.userId = userId;
+      }
+
+      const skip = (page - 1) * limit;
+
+      const [history, total] = await Promise.all([
+        BulkUpdateHistory.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .populate('userId', 'username email')
+          .lean(),
+        BulkUpdateHistory.countDocuments(query)
+      ]);
+
+      return {
+        history,
+        total,
+        page,
+        totalPages: Math.ceil(total / limit)
+      };
+    } catch (err) {
+      console.error('Error getting bulk update history:', err);
+      throw err;
+    }
+  }
+
+  // Get history by ID
+  async getHistoryById(historyId) {
+    try {
+      if (!historyId) {
+        throw new Error('History ID is required');
+      }
+
+      const history = await BulkUpdateHistory.findById(historyId)
+        .populate('userId', 'username email')
+        .lean();
+
+      if (!history) {
+        throw new Error('History record not found');
+      }
+
+      return history;
+    } catch (err) {
+      console.error('Error getting history by ID:', err);
       throw err;
     }
   }
