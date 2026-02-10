@@ -1272,22 +1272,13 @@ class BookService {
         queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
       }
 
-      // Add book number range filter - handle both string and numeric values
+      // Add book number range filter - generate explicit list to avoid string comparison issues
+      const bookNumberStrings = [];
+      for (let i = bookNumberFrom; i <= bookNumberTo; i++) {
+        bookNumberStrings.push(String(i));
+      }
       queryConditions.push({
-        $or: [
-          {
-            'address.bookNumber': {
-              $gte: String(bookNumberFrom),
-              $lte: String(bookNumberTo)
-            }
-          },
-          {
-            'address.bookNumber': {
-              $gte: bookNumberFrom,
-              $lte: bookNumberTo
-            }
-          }
-        ]
+        'address.bookNumber': { $in: bookNumberStrings }
       });
 
       const query = { $and: queryConditions };
@@ -1464,22 +1455,13 @@ class BookService {
         queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
       }
 
-      // Add book number range filter - handle both string and numeric values
+      // Add book number range filter - generate explicit list to avoid string comparison issues
+      const bookNumberStrings = [];
+      for (let i = bookNumberFrom; i <= bookNumberTo; i++) {
+        bookNumberStrings.push(String(i));
+      }
       queryConditions.push({
-        $or: [
-          {
-            'address.bookNumber': {
-              $gte: String(bookNumberFrom),
-              $lte: String(bookNumberTo)
-            }
-          },
-          {
-            'address.bookNumber': {
-              $gte: bookNumberFrom,
-              $lte: bookNumberTo
-            }
-          }
-        ]
+        'address.bookNumber': { $in: bookNumberStrings }
       });
 
       const query = { $and: queryConditions };
@@ -1663,8 +1645,9 @@ class BookService {
       }
 
       // Prepare books to restore based on update type
+      // Handle old records without updateType (they were all subject updates)
       let booksToRestore = [];
-      if (historyRecord.updateType === 'subject') {
+      if (!historyRecord.updateType || historyRecord.updateType === 'subject') {
         booksToRestore = historyRecord.affectedBooks.map(({ bookId, previousSubjectId }) => ({
           bookId: bookId.toString(),
           previousSubjectId: previousSubjectId ? previousSubjectId.toString() : null
