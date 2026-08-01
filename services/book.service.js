@@ -483,86 +483,53 @@ class BookService {
       }
     };
 
-    // Always sort by numeric address fields (room, shelf, wall, book),
-    // but handle non-numeric values (e.g. "أ ب") by falling back to string sorting.
-    const sortStage = [
-      {
-        $addFields: {
-          // Numeric attempts (null if not convertible)
-          tempRoomNum: { $convert: { input: '$address.roomNumber', to: 'int', onError: null, onNull: null } },
-          tempShelfNum: { $convert: { input: '$address.shelfNumber', to: 'int', onError: null, onNull: null } },
-          tempWallNum: { $convert: { input: '$address.wallNumber', to: 'int', onError: null, onNull: null } },
-          tempBookNum: { $convert: { input: '$address.bookNumber', to: 'int', onError: null, onNull: null } },
-
-          // String fallbacks (trimmed)
-          tempRoomStr: { $trim: { input: { $ifNull: ['$address.roomNumber', ''] } } },
-          tempShelfStr: { $trim: { input: { $ifNull: ['$address.shelfNumber', ''] } } },
-          tempWallStr: { $trim: { input: { $ifNull: ['$address.wallNumber', ''] } } },
-          tempBookStr: { $trim: { input: { $ifNull: ['$address.bookNumber', ''] } } },
-
-          // Flags: 0 if numeric exists, 1 if numeric is null — so numbers come first when sorting ascending.
-          // If you want non-numeric first, invert the 0/1 values.
-          tempRoomNumFlag: { $cond: [{ $ifNull: ['$tempRoomNum', false] }, 0, 1] },
-          tempShelfNumFlag: { $cond: [{ $ifNull: ['$tempShelfNum', false] }, 0, 1] },
-          tempWallNumFlag: { $cond: [{ $ifNull: ['$tempWallNum', false] }, 0, 1] },
-          tempBookNumFlag: { $cond: [{ $ifNull: ['$tempBookNum', false] }, 0, 1] }
-        }
-      },
-      {
-        $sort: {
-          // Primary ordering: by whether a numeric value exists (numbers first for asc)
-          tempRoomNumFlag: sortDir,
-          // If numeric exists for both, sort by numeric value; otherwise by string fallback
-          tempRoomNum: sortDir,
-          tempRoomStr: sortDir,
-
-          tempShelfNumFlag: sortDir,
-          tempShelfNum: sortDir,
-          tempShelfStr: sortDir,
-
-          tempWallNumFlag: sortDir,
-          tempWallNum: sortDir,
-          tempWallStr: sortDir,
-
-          tempBookNumFlag: sortDir,
-          tempBookNum: sortDir,
-          tempBookStr: sortDir
-        }
-      },
-      {
-        $project: {
-          // remove helper fields
-          tempRoomNum: 0, tempShelfNum: 0, tempWallNum: 0, tempBookNum: 0,
-          tempRoomStr: 0, tempShelfStr: 0, tempWallStr: 0, tempBookStr: 0,
-          tempRoomNumFlag: 0, tempShelfNumFlag: 0, tempWallNumFlag: 0, tempBookNumFlag: 0
-        }
+    // Sort by the precomputed address sort keys maintained in book.model.js
+    // (room → shelf → wall → book, numbers before text). _id breaks ties so
+    // pagination is stable across requests.
+    const sortStage = {
+      $sort: {
+        'sortKeys.room': sortDir,
+        'sortKeys.shelf': sortDir,
+        'sortKeys.wall': sortDir,
+        'sortKeys.book': sortDir,
+        _id: sortDir
       }
-    ];
+    };
 
+    // Drop the joined arrays before sorting so the sort handles slim base documents.
+    const stripLookupsStage = {
+      $project: {
+        authorData: 0, commentatorData: 0, editorData: 0, caretakerData: 0,
+        muhashiData: 0, publisherData: 0, categoryData: 0, subjectData: 0
+      }
+    };
 
-    // Build pipeline
+    // Search filters match on joined fields (author names, category titles, ...),
+    // so lookups must run before $match when filtering. Without filters, the sort
+    // runs straight off the compound sortKeys index, and the lookups + display
+    // projection only run for the single page of results inside $facet.
     const pipeline = [
-      ...lookupStages,
-      ...matchStage,
-      projectStage,
-      ...sortStage,
+      ...(matchStage.length ? [...lookupStages, ...matchStage, stripLookupsStage] : []),
+      sortStage,
       {
         $facet: {
           paginatedResults: [
             { $skip: skip },
-            { $limit: limit }
+            { $limit: limit },
+            ...lookupStages,
+            projectStage
           ],
           counts: [
             { $count: 'filteredCount' }
           ],
           uniqueAuthors: [
             { $unwind: { path: '$authors', preserveNullAndEmptyArrays: true } },
-            { $group: { _id: '$authors._id' } },
+            { $group: { _id: '$authors' } },
             { $count: 'count' }
           ],
           uniquePublishers: [
             { $unwind: { path: '$publishers', preserveNullAndEmptyArrays: true } },
-            { $group: { _id: '$publishers._id' } },
+            { $group: { _id: '$publishers' } },
             { $count: 'count' }
           ]
         }
@@ -581,7 +548,7 @@ class BookService {
     // console.dir(pipeline, { depth: null });
 
     // Execute aggregation
-    const aggResult = await BookModel.aggregate(pipeline);
+    const aggResult = await BookModel.aggregate(pipeline).allowDiskUse(true);
 
     // Process results
     const resultDoc = aggResult[0] || { paginatedResults: [], filteredCount: 0, uniqueAuthors: 0, uniquePublishers: 0 };
@@ -785,55 +752,24 @@ class BookService {
       }
     };
 
-    // Sort stage (same as getAllBooks)
-    const sortStage = [
-      {
-        $addFields: {
-          tempRoomNum: { $convert: { input: '$address.roomNumber', to: 'int', onError: null, onNull: null } },
-          tempShelfNum: { $convert: { input: '$address.shelfNumber', to: 'int', onError: null, onNull: null } },
-          tempWallNum: { $convert: { input: '$address.wallNumber', to: 'int', onError: null, onNull: null } },
-          tempBookNum: { $convert: { input: '$address.bookNumber', to: 'int', onError: null, onNull: null } },
-          tempRoomStr: { $trim: { input: { $ifNull: ['$address.roomNumber', ''] } } },
-          tempShelfStr: { $trim: { input: { $ifNull: ['$address.shelfNumber', ''] } } },
-          tempWallStr: { $trim: { input: { $ifNull: ['$address.wallNumber', ''] } } },
-          tempBookStr: { $trim: { input: { $ifNull: ['$address.bookNumber', ''] } } },
-          tempRoomNumFlag: { $cond: [{ $ifNull: ['$tempRoomNum', false] }, 0, 1] },
-          tempShelfNumFlag: { $cond: [{ $ifNull: ['$tempShelfNum', false] }, 0, 1] },
-          tempWallNumFlag: { $cond: [{ $ifNull: ['$tempWallNum', false] }, 0, 1] },
-          tempBookNumFlag: { $cond: [{ $ifNull: ['$tempBookNum', false] }, 0, 1] }
-        }
-      },
-      {
-        $sort: {
-          tempRoomNumFlag: sortDir,
-          tempRoomNum: sortDir,
-          tempRoomStr: sortDir,
-          tempShelfNumFlag: sortDir,
-          tempShelfNum: sortDir,
-          tempShelfStr: sortDir,
-          tempWallNumFlag: sortDir,
-          tempWallNum: sortDir,
-          tempWallStr: sortDir,
-          tempBookNumFlag: sortDir,
-          tempBookNum: sortDir,
-          tempBookStr: sortDir
-        }
-      },
-      {
-        $project: {
-          tempRoomNum: 0, tempShelfNum: 0, tempWallNum: 0, tempBookNum: 0,
-          tempRoomStr: 0, tempShelfStr: 0, tempWallStr: 0, tempBookStr: 0,
-          tempRoomNumFlag: 0, tempShelfNumFlag: 0, tempWallNumFlag: 0, tempBookNumFlag: 0
-        }
+    // Sort stage (same keys as getAllBooks, see book.model.js). Runs before the
+    // projection because the projection drops sortKeys.
+    const sortStage = {
+      $sort: {
+        'sortKeys.room': sortDir,
+        'sortKeys.shelf': sortDir,
+        'sortKeys.wall': sortDir,
+        'sortKeys.book': sortDir,
+        _id: sortDir
       }
-    ];
+    };
 
     // Build pipeline WITHOUT pagination
     const pipeline = [
       ...lookupStages,
       ...matchStage,
-      projectStage,
-      ...sortStage
+      sortStage,
+      projectStage
     ];
 
     // Execute aggregation to get ALL matching books
@@ -1761,56 +1697,6 @@ class BookService {
       { path: 'muhashis', select: 'name type' },
       { path: 'publishers', select: 'title' },
     ]);
-  }
-
-  async updateBook(id, bookData) {
-    const updatePayload = { ...bookData };
-
-    if (bookData.imagePath) {
-      updatePayload.imageUrl = bookData.imagePath;
-    } else {
-      delete updatePayload.imagePath;
-    }
-
-    // FIX: Validate and parse pageCount for updates
-    if (updatePayload.pageCount !== undefined) {
-      let pageCountValue = parseInt(updatePayload.pageCount, 10);
-      if (isNaN(pageCountValue) || pageCountValue < 0) {
-        pageCountValue = 0; // Default or handle as error
-        console.warn(`Invalid pageCount received during update: ${updatePayload.pageCount}. Defaulting to ${pageCountValue}.`);
-      }
-      updatePayload.pageCount = pageCountValue;
-    }
-
-    // Resolve IDs for nested entities if they are provided in the update payload.
-    if (bookData.category) {
-      updatePayload.category = await this.resolveEntity(bookData.category, Category, 'title');
-    }
-    if (bookData.subject) {
-      updatePayload.subject = await this.resolveEntity(bookData.subject, Subject, 'title');
-    }
-    if (bookData.publishers) {
-      updatePayload.publishers = await this.resolveEntity(bookData.publishers, Publisher, 'title');
-    }
-    if (bookData.authors) {
-      updatePayload.authors = await this.resolveEntity(bookData.authors, Author, 'name', { type: 'author' });
-    }
-    if (bookData.commentators) {
-      updatePayload.commentators = await this.resolveEntity(bookData.commentators, Author, 'name', { type: 'commentator' });
-    }
-    if (bookData.editors) {
-      updatePayload.editors = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
-    }
-    if (bookData.caretakers) {
-      updatePayload.caretakers = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
-    }
-    if (bookData.muhashis) {
-      updatePayload.muhashis = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
-    }
-
-    let updatedBook = await BookModel.findByIdAndUpdate(id, updatePayload, { new: true });
-    let book = await this.getBookById(updatedBook._id);
-    return book;
   }
 
   async deleteBook(id) {

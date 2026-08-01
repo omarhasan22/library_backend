@@ -108,11 +108,70 @@ const BookSchema = new mongoose.Schema({
   notes: {
     type: String,
     trim: true
+  },
+
+  // Precomputed sortable keys for the address fields, maintained by the
+  // pre-save / pre-findOneAndUpdate hooks below. Numeric values are encoded as
+  // '0' + zero-padded digits and non-numeric values as '1' + raw string, so a
+  // plain ascending string sort orders numbers numerically and before text —
+  // the same ordering the old $convert/$cond aggregation stages produced.
+  sortKeys: {
+    room: { type: String },
+    shelf: { type: String },
+    wall: { type: String },
+    book: { type: String }
   }
 
 }, {
   timestamps: true
 });
+
+function addressSortKey(value) {
+  const str = value == null ? '' : String(value).trim();
+  if (/^\d+$/.test(str)) return '0' + str.padStart(12, '0');
+  return '1' + str;
+}
+
+function computeSortKeys(address) {
+  const a = address || {};
+  return {
+    room: addressSortKey(a.roomNumber),
+    shelf: addressSortKey(a.shelfNumber),
+    wall: addressSortKey(a.wallNumber),
+    book: addressSortKey(a.bookNumber)
+  };
+}
+
+BookSchema.statics.computeSortKeys = computeSortKeys;
+
+BookSchema.pre('save', function (next) {
+  this.sortKeys = computeSortKeys(this.address);
+  next();
+});
+
+BookSchema.pre('findOneAndUpdate', function (next) {
+  const update = this.getUpdate() || {};
+  if (update.$set && update.$set.address) {
+    update.$set.sortKeys = computeSortKeys(update.$set.address);
+  } else if (update.address) {
+    update.sortKeys = computeSortKeys(update.address);
+  }
+  next();
+});
+
+// One-time, idempotent backfill for books created before sortKeys existed.
+BookSchema.statics.backfillSortKeys = async function () {
+  const missing = await this.find({ 'sortKeys.room': { $exists: false } }).select('address').lean();
+  if (!missing.length) return 0;
+  const ops = missing.map(doc => ({
+    updateOne: {
+      filter: { _id: doc._id },
+      update: { $set: { sortKeys: computeSortKeys(doc.address) } }
+    }
+  }));
+  await this.bulkWrite(ops, { ordered: false });
+  return ops.length;
+};
 
 // Single field indexes
 BookSchema.index({ normalizedTitle: 1 });
@@ -131,5 +190,9 @@ BookSchema.index({ publishers: 1 });
 // Compound indexes for common query patterns
 BookSchema.index({ category: 1, subject: 1 });
 BookSchema.index({ normalizedTitle: 1, category: 1 });
+
+// Supports the default book-list sort (room → shelf → wall → book, _id tiebreaker)
+// in both directions without an in-memory sort.
+BookSchema.index({ 'sortKeys.room': 1, 'sortKeys.shelf': 1, 'sortKeys.wall': 1, 'sortKeys.book': 1, _id: 1 });
 
 module.exports = mongoose.model('Book', BookSchema);

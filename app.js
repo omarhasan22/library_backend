@@ -54,11 +54,20 @@ mongoose
 		useNewUrlParser: true,
 		useUnifiedTopology: true,
 	})
-	.then(() =>
+	.then(async () => {
 		console.log(
 			`✅ MongoDB connected (${isProduction ? 'production' : 'development'})`
-		)
-	)
+		);
+		try {
+			const Book = require('./models/book.model');
+			const backfilled = await Book.backfillSortKeys();
+			if (backfilled) {
+				console.log(`✅ Backfilled address sort keys on ${backfilled} books`);
+			}
+		} catch (err) {
+			console.error('❌ Address sort key backfill failed:', err);
+		}
+	})
 	.catch((err) => console.error('❌ MongoDB connection error:', err));
 
 mongoose.Promise = global.Promise;
