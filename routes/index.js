@@ -14,6 +14,8 @@ const AuthorController = require('../controllers/author.controller');
 const PublisherController = require('../controllers/publisher.controller');
 const CategoryController = require('../controllers/category.controller');
 const SubjectController = require('../controllers/subject.controller');
+const DisplayController = require('../controllers/display.controller');
+const displayUpload = require('../middlewares/display-upload');
 
 // Shorthand for routes that change data or expose other users' data.
 const admin = [isAuthenticate, requireAdmin];
@@ -138,5 +140,17 @@ router.get('/borrows/overdue', admin, BorrowController.getOverdueBooks);
 router.get('/borrows/statistics', admin, BorrowController.getBorrowStatistics);
 router.post('/borrows/send-reminders', admin, BorrowController.sendDueDateReminders);
 router.post('/borrows/send-overdue-notifications', admin, BorrowController.sendOverdueNotifications);
+
+// DISPLAY SCREEN ROUTES (the slideshow shown on the library screen)
+// The screen itself is public (a TV just opens the page); managing it is admin-only.
+// Static paths stay above /display/slides/:id.
+router.get('/display', DisplayController.getScreen);
+router.get('/display/media/:id', DisplayController.getMedia);
+router.get('/display/admin', admin, DisplayController.getAdminData);
+router.put('/display/settings', admin, DisplayController.updateSettings);
+router.put('/display/slides/reorder', admin, DisplayController.reorderSlides);
+router.post('/display/slides', admin, displayUpload, DisplayController.createSlide);
+router.put('/display/slides/:id', admin, displayUpload, DisplayController.updateSlide);
+router.delete('/display/slides/:id', admin, DisplayController.deleteSlide);
 
 module.exports = router;
