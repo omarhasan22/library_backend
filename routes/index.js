@@ -74,6 +74,7 @@ router.get('/books', bookController.getAllBooks);
 router.get('/books/statistics', bookController.getStatistics);
 router.get('/books/rooms', bookController.getUniqueRoomNumbers);
 router.get('/books/walls', bookController.getUniqueWallNumbers);
+router.get('/books/locations', bookController.getLocationSummary);
 router.post('/books', admin, bookController.createBook);
 router.post('/books/export', admin, bookController.exportBooks);
 router.post('/books/export-locations', admin, bookController.exportBookLocations);

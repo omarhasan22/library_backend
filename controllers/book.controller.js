@@ -224,6 +224,15 @@ class BookController {
     }
   }
 
+  // Public: books per room and stand (home page library map).
+  async getLocationSummary(req, res) {
+    try {
+      res.status(200).json(await BookService.getLocationSummary());
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  }
+
   async getUniqueWallNumbers(req, res) {
     try {
       const roomNumber = req.query.roomNumber || req.params.roomNumber;

@@ -8,7 +8,7 @@ const Author = require('../models/author.model'); // Every person type: authors,
 const Publisher = require('../models/publisher.model');
 const BulkUpdateHistory = require('../models/bulk-update-history.model');
 
-const { normalizeArabicText, escapeRegex, digitVariants } = require('../utils/text');
+const { normalizeArabicText, escapeRegex, digitVariants, toLatinDigits } = require('../utils/text');
 
 const MAX_PAGE_SIZE = 500;
 const BULK_UPDATE_MAX_RANGE = 5000;
@@ -1379,6 +1379,35 @@ class BookService {
       const entry = byCategory.get(String(category._id));
       return { ...category, booksCount: entry ? entry.total : 0, subjectBookCounts: entry ? entry.subjects : {} };
     });
+  }
+
+  // Books per room and per stand (الاستاند), for the home page's library map. Rooms typed with
+  // Arabic-Indic digits ("١١") are merged with their Latin spelling ("11"), matching roomExact.
+  async getLocationSummary() {
+    const groups = await BookModel.aggregate([
+      { $group: { _id: { room: '$address.roomNumber', wall: '$address.wallNumber' }, n: { $sum: 1 } } }
+    ]);
+    const rooms = new Map();
+    let unassigned = 0;
+    for (const { _id, n } of groups) {
+      const room = toLatinDigits(String(_id.room ?? '').trim());
+      if (!room) { unassigned += n; continue; }
+      if (!rooms.has(room)) rooms.set(room, { room, count: 0, walls: new Map() });
+      const entry = rooms.get(room);
+      entry.count += n;
+      const wall = String(_id.wall ?? '').trim();
+      if (wall) entry.walls.set(wall, (entry.walls.get(wall) || 0) + n);
+    }
+    return {
+      rooms: [...rooms.values()]
+        .map(r => ({
+          room: r.room,
+          count: r.count,
+          walls: [...r.walls].map(([wall, count]) => ({ wall, count })).sort((a, b) => a.wall.localeCompare(b.wall, 'ar'))
+        }))
+        .sort((a, b) => a.room.localeCompare(b.room, 'en', { numeric: true })),
+      unassigned
+    };
   }
 
   // What a bulk update would change, without changing anything: the number of matching books and the
