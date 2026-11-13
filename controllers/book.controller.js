@@ -80,13 +80,15 @@ class BookController {
       const page = parseInt(req.query.page, 10) || 1;
       const limit = parseInt(req.query.limit, 10) || 20;
       const sortDirection = req.query.sortDirection === 'desc' ? 'desc' : 'asc';
+      const sort = req.query.sort === 'recent' ? 'recent' : '';
 
       const result = await BookService.getAllBooks(
         query,
         searchTerm,
         page,
         limit,
-        sortDirection
+        sortDirection,
+        sort
       );
 
       res.status(200).json(result);
@@ -265,6 +267,19 @@ class BookController {
       res.status(200).json(result);
     } catch (err) {
       console.error('Error in bulk update subjects:', err);
+      res.status(400).json({ error: err.message });
+    }
+  }
+
+  // Read-only: how many books a bulk update with these criteria would change, and the first 20.
+  async previewBulkUpdate(req, res) {
+    try {
+      const { roomNumber, wallNumber, shelfNumber, bookNumberFrom, bookNumberTo } = req.body || {};
+      const result = await BookService.previewBulkUpdate({
+        roomNumber, wallNumber, shelfNumber, bookNumberFrom, bookNumberTo
+      });
+      res.status(200).json(result);
+    } catch (err) {
       res.status(400).json({ error: err.message });
     }
   }

@@ -8,7 +8,7 @@ const Author = require('../models/author.model'); // Every person type: authors,
 const Publisher = require('../models/publisher.model');
 const BulkUpdateHistory = require('../models/bulk-update-history.model');
 
-const { normalizeArabicText, escapeRegex } = require('../utils/text');
+const { normalizeArabicText, escapeRegex, digitVariants } = require('../utils/text');
 
 const MAX_PAGE_SIZE = 500;
 const BULK_UPDATE_MAX_RANGE = 5000;
@@ -43,6 +43,9 @@ const NUMERIC_FIELDS = ['numberOfVolumes', 'numberOfFolders', 'editionNumber', '
 //   ref     - the text lives in another collection; matching ids are found there first so the book
 //             query is an indexed `$in` instead of a $lookup over every book
 //   numeric - exact number match, regex fallback for non-numeric input
+//   id      - exact match on a reference id (category/subject chosen from a list, not typed text)
+//   exact   - exact match on a location value, in either digit system ("11" or "١١")
+// Fields with anyField: false are only used when asked for by name, never by the "all fields" search.
 const SEARCH_FIELDS = {
   title: { type: 'text', path: 'normalizedTitle', normalized: true },
   category: { type: 'ref', path: 'category', model: Category, field: 'normalizedTitle' },
@@ -54,15 +57,55 @@ const SEARCH_FIELDS = {
   wallNumber: { type: 'text', path: 'address.wallNumber' },
   bookNumber: { type: 'text', path: 'address.bookNumber' },
   ...Object.fromEntries(NUMERIC_FIELDS.map(f => [f, { type: 'numeric', path: f }])),
-  notes: { type: 'text', path: 'notes' }
+  notes: { type: 'text', path: 'notes' },
+  categoryId: { type: 'id', path: 'category', anyField: false },
+  subjectId: { type: 'id', path: 'subject', anyField: false },
+  roomExact: { type: 'exact', path: 'address.roomNumber', anyField: false },
+  wallExact: { type: 'exact', path: 'address.wallNumber', anyField: false },
+  shelfExact: { type: 'exact', path: 'address.shelfNumber', anyField: false }
 };
 const SEARCH_FIELD_ALIASES = { subcategory: 'subject' };
-const ANY_FIELD_KEYS = Object.keys(SEARCH_FIELDS);
+const ANY_FIELD_KEYS = Object.keys(SEARCH_FIELDS).filter(key => SEARCH_FIELDS[key].anyField !== false);
 
 function searchFieldConfig(key) {
   if (typeof key !== 'string') return null;
   const name = Object.hasOwn(SEARCH_FIELD_ALIASES, key) ? SEARCH_FIELD_ALIASES[key] : key;
   return Object.hasOwn(SEARCH_FIELDS, name) ? SEARCH_FIELDS[name] : null;
+}
+
+// The books a bulk update targets: one shelf (optionally narrowed to a room and wall) and a range of
+// book numbers. Shared by both bulk updates and their preview, so the preview always matches the update.
+function bulkCriteriaQuery(criteria) {
+  if (!criteria.shelfNumber) {
+    throw new Error('Shelf number is required');
+  }
+  const bookNumberFrom = parseInt(criteria.bookNumberFrom, 10);
+  const bookNumberTo = parseInt(criteria.bookNumberTo, 10);
+
+  if (isNaN(bookNumberFrom) || isNaN(bookNumberTo)) {
+    throw new Error('Book number range must be valid numbers');
+  }
+  if (bookNumberFrom > bookNumberTo) {
+    throw new Error('Book number "from" must be less than or equal to "to"');
+  }
+  if (bookNumberTo - bookNumberFrom + 1 > BULK_UPDATE_MAX_RANGE) {
+    throw new Error(`Book number range is too large (max ${BULK_UPDATE_MAX_RANGE} books per update)`);
+  }
+
+  const queryConditions = [{ 'address.shelfNumber': String(criteria.shelfNumber) }];
+  if (criteria.roomNumber) {
+    queryConditions.push({ 'address.roomNumber': criteria.roomNumber });
+  }
+  if (criteria.wallNumber) {
+    queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
+  }
+  // Explicit list of numbers: book numbers are stored as strings, so a range comparison would be wrong.
+  const bookNumberStrings = [];
+  for (let i = bookNumberFrom; i <= bookNumberTo; i++) {
+    bookNumberStrings.push(String(i));
+  }
+  queryConditions.push({ 'address.bookNumber': { $in: bookNumberStrings } });
+  return { $and: queryConditions };
 }
 
 // Address order: room -> shelf -> wall -> book (numbers before text), _id as a stable tiebreaker.
@@ -342,6 +385,14 @@ class BookService {
     };
 
     const fieldCondition = async (cfg, raw, normalized) => {
+      if (cfg.type === 'id') {
+        // $match in an aggregation does not cast strings to ObjectId, so cast here.
+        const id = raw.trim();
+        return /^[a-f\d]{24}$/i.test(id) ? { [cfg.path]: new mongoose.Types.ObjectId(id) } : { _id: null };
+      }
+      if (cfg.type === 'exact') {
+        return { [cfg.path]: { $in: digitVariants(raw) } };
+      }
       if (cfg.type === 'ref') {
         return { [cfg.path]: { $in: await refIds(cfg, escapeRegex(normalized)) } };
       }
@@ -394,7 +445,8 @@ class BookService {
     searchTerm = '',
     page = 1,
     limit = 30,
-    sortDirection = 'asc'
+    sortDirection = 'asc',
+    sort = ''
   ) {
     page = Math.max(1, Number(page) || 1);
     limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(limit) || 30));
@@ -410,7 +462,8 @@ class BookService {
     const [books, statsResult, totalBooks] = await Promise.all([
       BookModel.aggregate([
         ...match,
-        addressSortStage(sortDir),
+        // 'recent' = newest additions first (ObjectIds grow with creation time); default = shelf order.
+        sort === 'recent' ? { $sort: { _id: -1 } } : addressSortStage(sortDir),
         { $skip: (page - 1) * limit },
         { $limit: limit },
         ...LOOKUP_STAGES,
@@ -614,75 +667,11 @@ class BookService {
       }
     ];
 
-    // Build matchStage for additional filters (reuse logic from exportBooksToExcel)
-    // First, apply room number filter
-    const matchStage = [{ $match: { "address.roomNumber": String(roomNumber) } }];
-
-    // Then apply additional filters if provided (after lookups)
-    if (query === 'advanced') {
-      let filters = [];
-      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
-
-      // Filter out roomNumber from additional filters since we already applied it
-      const additionalFilters = filters.filter(f => f.field !== 'roomNumber');
-
-      if (additionalFilters.length > 0) {
-        const conditions = additionalFilters.map(({ field, value }) => {
-          const normalizedValue = this.normalizeArabicText(value);
-          const normEsc = this.escapeRegex(normalizedValue);
-          const rawEsc = this.escapeRegex(value);
-          // For locations export, only use direct Book fields (no lookups needed for filtering)
-          const pathMap = {
-            title: { path: 'normalizedTitle', useNormalized: true },
-            shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
-            wallNumber: { path: 'address.wallNumber', useNormalized: false },
-            bookNumber: { path: 'address.bookNumber', useNormalized: false },
-            numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
-            numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
-            editionNumber: { path: 'editionNumber', useNormalized: false },
-            publicationYear: { path: 'publicationYear', useNormalized: false },
-            pageCount: { path: 'pageCount', useNormalized: false },
-            notes: { path: 'notes', useNormalized: false }
-          };
-
-          const cfg = pathMap[field];
-          if (!cfg) return null; // Skip fields not in pathMap
-
-          if (cfg.useNormalized) {
-            return { [cfg.path]: { $regex: normEsc, $options: 'i' } };
-          } else if (['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].includes(field)) {
-            const numValue = Number(value);
-            if (!isNaN(numValue)) {
-              return { [cfg.path]: numValue };
-            }
-            return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
-          } else {
-            return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
-          }
-        }).filter(c => c !== null); // Remove null conditions
-
-        if (conditions.length) {
-          matchStage.push({ $match: { $and: conditions } });
-        }
-      }
-    } else if (searchTerm && String(searchTerm).trim()) {
-      // Simple search - apply additional filters but exclude roomNumber
-      const rawTerm = String(searchTerm).trim();
-      const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
-      const rawEsc = this.escapeRegex(rawTerm);
-      const normEsc = this.escapeRegex(normalizedSearchTerm);
-
-      const orConditions = [];
-      // For simple search in locations export, only search in title and address fields
-      orConditions.push({ normalizedTitle: { $regex: normEsc, $options: 'i' } });
-      orConditions.push({ 'address.shelfNumber': { $regex: rawEsc, $options: 'i' } });
-      orConditions.push({ 'address.wallNumber': { $regex: rawEsc, $options: 'i' } });
-      orConditions.push({ 'address.bookNumber': { $regex: rawEsc, $options: 'i' } });
-      orConditions.push({ notes: { $regex: rawEsc, $options: 'i' } });
-      if (orConditions.length) {
-        matchStage.push({ $match: { $or: orConditions } });
-      }
-    }
+    // Same filter as the book list (search text, category, subject, people, advanced rows), applied
+    // within the chosen room. Every condition is on fields stored on the book, so it runs before the lookup.
+    const filter = await this.buildSearchFilter(query, searchTerm);
+    const roomMatch = { 'address.roomNumber': String(roomNumber) };
+    const matchStage = { $match: filter ? { $and: [roomMatch, filter] } : roomMatch };
 
     // Projection stage
     const projectStage = {
@@ -716,14 +705,9 @@ class BookService {
       }
     };
 
-    // Build pipeline
-    // Order: room filter first (for performance), then lookups, then additional filters, then project, then unwind
-    const roomFilter = matchStage[0]; // First match is room filter
-    const additionalFilters = matchStage.slice(1); // Rest are additional filters
-
+    // Filter first, then shelf order (before the projection drops sortKeys), then the subject lookup.
     const pipeline = [
-      roomFilter, // Apply room filter first for performance
-      ...additionalFilters, // These only use fields stored on the book, so they run before the lookup
+      matchStage,
       addressSortStage(sortDir), // Rows in shelf order (before the projection drops sortKeys)
       ...lookupStages,
       projectStage,
@@ -897,45 +881,7 @@ class BookService {
         throw new Error('Subject not found');
       }
 
-      // Add book number range filter
-      const bookNumberFrom = parseInt(criteria.bookNumberFrom, 10);
-      const bookNumberTo = parseInt(criteria.bookNumberTo, 10);
-
-      if (isNaN(bookNumberFrom) || isNaN(bookNumberTo)) {
-        throw new Error('Book number range must be valid numbers');
-      }
-
-      if (bookNumberFrom > bookNumberTo) {
-        throw new Error('Book number "from" must be less than or equal to "to"');
-      }
-
-      if (bookNumberTo - bookNumberFrom + 1 > BULK_UPDATE_MAX_RANGE) {
-        throw new Error(`Book number range is too large (max ${BULK_UPDATE_MAX_RANGE} books per update)`);
-      }
-
-      // Build query with $and to combine all conditions
-      const queryConditions = [
-        { 'address.shelfNumber': String(criteria.shelfNumber) }
-      ];
-
-      // Add optional filters
-      if (criteria.roomNumber) {
-        queryConditions.push({ 'address.roomNumber': criteria.roomNumber });
-      }
-      if (criteria.wallNumber) {
-        queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
-      }
-
-      // Add book number range filter - generate explicit list to avoid string comparison issues
-      const bookNumberStrings = [];
-      for (let i = bookNumberFrom; i <= bookNumberTo; i++) {
-        bookNumberStrings.push(String(i));
-      }
-      queryConditions.push({
-        'address.bookNumber': { $in: bookNumberStrings }
-      });
-
-      const query = { $and: queryConditions };
+      const query = bulkCriteriaQuery(criteria);
 
       // Store previous subject states before updating (for undo)
       // Also fetch book titles for history
@@ -1012,8 +958,9 @@ class BookService {
           roomNumber: criteria.roomNumber || undefined,
           wallNumber: criteria.wallNumber || undefined,
           shelfNumber: criteria.shelfNumber,
-          bookNumberFrom: bookNumberFrom,
-          bookNumberTo: bookNumberTo
+          // Parsed again here: bulkCriteriaQuery has already validated them.
+          bookNumberFrom: parseInt(criteria.bookNumberFrom, 10),
+          bookNumberTo: parseInt(criteria.bookNumberTo, 10)
         },
         oldSubject: oldSubject || { _id: null, title: null },
         newSubject: {
@@ -1083,45 +1030,7 @@ class BookService {
         throw new Error('Category not found');
       }
 
-      // Add book number range filter
-      const bookNumberFrom = parseInt(criteria.bookNumberFrom, 10);
-      const bookNumberTo = parseInt(criteria.bookNumberTo, 10);
-
-      if (isNaN(bookNumberFrom) || isNaN(bookNumberTo)) {
-        throw new Error('Book number range must be valid numbers');
-      }
-
-      if (bookNumberFrom > bookNumberTo) {
-        throw new Error('Book number "from" must be less than or equal to "to"');
-      }
-
-      if (bookNumberTo - bookNumberFrom + 1 > BULK_UPDATE_MAX_RANGE) {
-        throw new Error(`Book number range is too large (max ${BULK_UPDATE_MAX_RANGE} books per update)`);
-      }
-
-      // Build query with $and to combine all conditions
-      const queryConditions = [
-        { 'address.shelfNumber': String(criteria.shelfNumber) }
-      ];
-
-      // Add optional filters
-      if (criteria.roomNumber) {
-        queryConditions.push({ 'address.roomNumber': criteria.roomNumber });
-      }
-      if (criteria.wallNumber) {
-        queryConditions.push({ 'address.wallNumber': criteria.wallNumber });
-      }
-
-      // Add book number range filter - generate explicit list to avoid string comparison issues
-      const bookNumberStrings = [];
-      for (let i = bookNumberFrom; i <= bookNumberTo; i++) {
-        bookNumberStrings.push(String(i));
-      }
-      queryConditions.push({
-        'address.bookNumber': { $in: bookNumberStrings }
-      });
-
-      const query = { $and: queryConditions };
+      const query = bulkCriteriaQuery(criteria);
 
       // Store previous category states before updating (for undo)
       // Also fetch book titles for history
@@ -1198,8 +1107,9 @@ class BookService {
           roomNumber: criteria.roomNumber || undefined,
           wallNumber: criteria.wallNumber || undefined,
           shelfNumber: criteria.shelfNumber,
-          bookNumberFrom: bookNumberFrom,
-          bookNumberTo: bookNumberTo
+          // Parsed again here: bulkCriteriaQuery has already validated them.
+          bookNumberFrom: parseInt(criteria.bookNumberFrom, 10),
+          bookNumberTo: parseInt(criteria.bookNumberTo, 10)
         },
         oldCategory: oldCategory || { _id: null, title: null },
         newCategory: {
@@ -1437,16 +1347,63 @@ class BookService {
     return deleted;
   }
 
+  // Categories with their subjects (ids, as before) plus book counts: booksCount per category and
+  // subjectBookCounts { subjectId: n } for the books filed under that category and subject.
   async getCategories() {
-    return Category.aggregate([
-      {
-        $project: {
-          title: 1,
-        /* other fields you want: */ subjects: 1,
-          subjectsCount: { $size: { $ifNull: ["$subjects", []] } }
+    const [categories, counts] = await Promise.all([
+      Category.aggregate([
+        {
+          $project: {
+            title: 1,
+            subjects: 1,
+            subjectsCount: { $size: { $ifNull: ['$subjects', []] } }
+          }
         }
-      }
+      ]),
+      // Covered by the { category: 1, subject: 1 } index.
+      BookModel.aggregate([
+        { $group: { _id: { c: '$category', s: '$subject' }, n: { $sum: 1 } } }
+      ])
     ]);
+
+    const byCategory = new Map();
+    for (const { _id, n } of counts) {
+      if (!_id.c) continue;
+      const key = String(_id.c);
+      if (!byCategory.has(key)) byCategory.set(key, { total: 0, subjects: {} });
+      const entry = byCategory.get(key);
+      entry.total += n;
+      if (_id.s) entry.subjects[String(_id.s)] = (entry.subjects[String(_id.s)] || 0) + n;
+    }
+    return categories.map(category => {
+      const entry = byCategory.get(String(category._id));
+      return { ...category, booksCount: entry ? entry.total : 0, subjectBookCounts: entry ? entry.subjects : {} };
+    });
+  }
+
+  // What a bulk update would change, without changing anything: the number of matching books and the
+  // first 20 of them (in shelf order) so the admin can check the range before applying it.
+  async previewBulkUpdate(criteria) {
+    const query = bulkCriteriaQuery(criteria);
+    const [count, sample] = await Promise.all([
+      BookModel.countDocuments(query),
+      BookModel.aggregate([
+        { $match: query },
+        addressSortStage(1),
+        { $limit: 20 },
+        { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'category' } },
+        { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subject' } },
+        {
+          $project: {
+            title: 1,
+            address: 1,
+            category: { $first: '$category.title' },
+            subject: { $first: '$subject.title' }
+          }
+        }
+      ])
+    ]);
+    return { count, sample };
   }
 
 

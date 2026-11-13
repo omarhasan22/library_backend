@@ -42,4 +42,18 @@ function buildNameSearch(search, field, normalizedField) {
   };
 }
 
-module.exports = { normalizeArabicText, escapeRegex, parsePagination, buildNameSearch };
+
+// Location values were typed with both digit systems ("11" and "١١"). Returns every spelling of a
+// value so an exact location filter matches both: the value as typed, Latin digits, Arabic-Indic digits.
+const ARABIC_INDIC = '٠١٢٣٤٥٦٧٨٩';
+function toLatinDigits(str = '') {
+  return String(str).replace(/[٠-٩]/g, d => String(ARABIC_INDIC.indexOf(d)));
+}
+function digitVariants(value) {
+  const raw = String(value ?? '').trim();
+  const latin = toLatinDigits(raw);
+  const arabic = latin.replace(/[0-9]/g, d => ARABIC_INDIC[Number(d)]);
+  return [...new Set([raw, latin, arabic])];
+}
+
+module.exports = { normalizeArabicText, escapeRegex, parsePagination, buildNameSearch, toLatinDigits, digitVariants };

@@ -77,6 +77,7 @@ router.get('/books/walls', bookController.getUniqueWallNumbers);
 router.post('/books', admin, bookController.createBook);
 router.post('/books/export', admin, bookController.exportBooks);
 router.post('/books/export-locations', admin, bookController.exportBookLocations);
+router.post('/books/bulk-update-preview', admin, bookController.previewBulkUpdate);
 router.post('/books/bulk-update-subjects', admin, bookController.bulkUpdateSubjects);
 router.post('/books/bulk-update-categories', admin, bookController.bulkUpdateCategories);
 router.post('/books/undo-bulk-update-subjects', admin, bookController.undoBulkUpdateSubjects);
