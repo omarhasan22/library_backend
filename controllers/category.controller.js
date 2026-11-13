@@ -1,26 +1,18 @@
 const Category = require('../models/category.model');
+const { normalizeArabicText, parsePagination, buildNameSearch } = require('../utils/text');
 
 class CategoryController {
    // Get all categories
    async getAllCategories(req, res) {
       try {
-         const { page = 1, limit = 10, search = '' } = req.query;
-         const query = {};
+         const { search = '' } = req.query;
+         const { page, limit, skip } = parsePagination(req.query);
+         const query = buildNameSearch(search, 'title', 'normalizedTitle');
 
-         if (search) {
-            query.$or = [
-               { title: { $regex: search, $options: 'i' } },
-               { normalizedTitle: { $regex: search, $options: 'i' } }
-            ];
-         }
-
-         const categories = await Category.find(query)
-            .sort({ title: 1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .exec();
-
-         const total = await Category.countDocuments(query);
+         const [categories, total] = await Promise.all([
+            Category.find(query).sort({ title: 1 }).skip(skip).limit(limit).lean(),
+            Category.countDocuments(query)
+         ]);
 
          res.json({
             categories,
@@ -51,8 +43,10 @@ class CategoryController {
       try {
          const { title, subjects = [] } = req.body;
 
-         // Create normalized title for searching
-         const normalizedTitle = title.toLowerCase().trim();
+         if (!title || !String(title).trim()) {
+            return res.status(400).json({ error: 'Title is required' });
+         }
+         const normalizedTitle = normalizeArabicText(title);
 
          const category = new Category({
             title,
@@ -72,9 +66,13 @@ class CategoryController {
       try {
          const { title, subjects } = req.body;
 
+         if (!title || !String(title).trim()) {
+            return res.status(400).json({ error: 'Title is required' });
+         }
+
          const updateData = {
             title,
-            normalizedTitle: title.toLowerCase().trim()
+            normalizedTitle: normalizeArabicText(title)
          };
 
          if (subjects !== undefined) {
@@ -113,7 +111,7 @@ class CategoryController {
    // Get category statistics
    async getCategoryStats(req, res) {
       try {
-         const totalCategories = await Category.countDocuments();
+         const totalCategories = await Category.estimatedDocumentCount();
 
          res.json({
             totalCategories

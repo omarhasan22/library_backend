@@ -1,14 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
-const User = mongoose.model('User');
-const bcrypt = require('bcrypt');
-const upload = require('../middlewares/multer');
+const rateLimit = require('express-rate-limit');
+const User = require('../models/users.model');
 
 const registrationCtrl = require('../controllers/registration.controller');
 const loginCtrl = require('../controllers/login.controller');
 const refreshCtrl = require('../controllers/refresh.controller');
-const { isAuthenticate } = require('../middlewares/authenticate');
+const { isAuthenticate, requireAdmin } = require('../middlewares/authenticate');
 
 const bookController = require('../controllers/book.controller');
 const BorrowController = require('../controllers/borrow.controller');
@@ -17,29 +15,42 @@ const PublisherController = require('../controllers/publisher.controller');
 const CategoryController = require('../controllers/category.controller');
 const SubjectController = require('../controllers/subject.controller');
 
+// Shorthand for routes that change data or expose other users' data.
+const admin = [isAuthenticate, requireAdmin];
+
+// Slow down password guessing / account spam.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Too many attempts, please try again later.' }
+});
+
 // AUTH ROUTES
-router.post('/auth/register', registrationCtrl.register);
-router.post('/auth/login', loginCtrl.login);
+router.post('/auth/register', authLimiter, registrationCtrl.register);
+router.post('/auth/login', authLimiter, loginCtrl.login);
 router.post('/auth/refresh', refreshCtrl.refresh);
 router.get('/auth/profile', isAuthenticate, loginCtrl.getProfile);
 router.put('/auth/profile', isAuthenticate, loginCtrl.updateProfile);
 
-// USER CRUD OPERATIONS
-router.post('/users/create', async (req, res) => {
+// USER ADMIN OPERATIONS (not used by the frontend; admin-only)
+router.post('/users/create', admin, async (req, res) => {
   try {
-    const user = new User(req.body);
-    user.password = bcrypt.hashSync(user.password, bcrypt.genSaltSync(10));
-    const result = await User.create(user);
+    const { email, username, password, role } = req.body;
+    // The users model pre-save hook hashes the password.
+    const result = await User.create({ email, username, password, role });
     res.json({ message: `${result.username} successfully created!` });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
-router.get('/users/:username', async (req, res) => {
+router.get('/users/userId/:userId', admin, loginCtrl.getUser);
+
+router.get('/users/:username', admin, async (req, res) => {
   try {
-    const { username } = req.params;
-    const user = await User.findOne({ username });
+    const user = await User.findOne({ username: String(req.params.username) }).select('-password');
     if (!user) return res.status(404).json({ error: 'User not found' });
     res.json(user);
   } catch (err) {
@@ -47,118 +58,85 @@ router.get('/users/:username', async (req, res) => {
   }
 });
 
-router.get('/users/userId/:userId', loginCtrl.getUser);
-
-
-router.put('/users/update', async (req, res) => {
+router.delete('/users/delete', admin, async (req, res) => {
   try {
-    const { username, nickname } = req.body;
-    const updatedUser = await User.findOneAndUpdate(
-      { username },
-      { $set: { nickname } },
-      { new: true }
-    );
-    res.json(updatedUser);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.delete('/users/delete', async (req, res) => {
-  try {
-    const { username } = req.body;
-    const result = await User.deleteOne({ username });
+    const result = await User.deleteOne({ username: String(req.body.username) });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-
-// BOOK ROUTES
-// remove multer for JSON creation
-router.post('/books', bookController.createBook);
-
+// BOOK ROUTES (static paths must stay above /books/:id)
 router.get('/books', bookController.getAllBooks);
 router.get('/books/statistics', bookController.getStatistics);
 router.get('/books/rooms', bookController.getUniqueRoomNumbers);
 router.get('/books/walls', bookController.getUniqueWallNumbers);
-router.post('/books/export', bookController.exportBooks);
-router.post('/books/export-locations', bookController.exportBookLocations);
-router.post('/books/bulk-update-subjects', isAuthenticate, bookController.bulkUpdateSubjects);
-router.post('/books/bulk-update-categories', isAuthenticate, bookController.bulkUpdateCategories);
-router.post('/books/undo-bulk-update-subjects', isAuthenticate, bookController.undoBulkUpdateSubjects);
-router.get('/books/bulk-update-history', isAuthenticate, bookController.getBulkUpdateHistory);
-router.get('/books/bulk-update-history/:id', isAuthenticate, bookController.getHistoryById);
+router.post('/books', admin, bookController.createBook);
+router.post('/books/export', admin, bookController.exportBooks);
+router.post('/books/export-locations', admin, bookController.exportBookLocations);
+router.post('/books/bulk-update-subjects', admin, bookController.bulkUpdateSubjects);
+router.post('/books/bulk-update-categories', admin, bookController.bulkUpdateCategories);
+router.post('/books/undo-bulk-update-subjects', admin, bookController.undoBulkUpdateSubjects);
+router.get('/books/bulk-update-history', admin, bookController.getBulkUpdateHistory);
+router.get('/books/bulk-update-history/:id', admin, bookController.getHistoryById);
 router.get('/books/:id', bookController.getBookById);
-router.put('/books/:id', bookController.updateBook);
-router.delete('/books/:id', bookController.deleteBook);
+router.put('/books/:id', admin, bookController.updateBook);
+router.delete('/books/:id', admin, bookController.deleteBook);
 
 // CATEGORY ROUTES
+// GET/POST /categories use the book controller (array response + Arabic-normalized de-duplication),
+// which is what the frontend expects. Static paths stay above /:id.
 router.get('/categories', bookController.getCategories);
-router.get('/categories/:category-id', bookController.getCategoryById);
-router.post('/categories', bookController.createCategory); // NEW ROUTE
+router.post('/categories', admin, bookController.createCategory);
+router.get('/categories/stats', CategoryController.getCategoryStats);
+router.get('/categories/:id', CategoryController.getCategoryById);
+router.put('/categories/:id', admin, CategoryController.updateCategory);
+router.delete('/categories/:id', admin, CategoryController.deleteCategory);
 
 // SUBJECT ROUTES
 router.get('/subjects', bookController.getsubjects);
-router.post('/subjects', bookController.createSubject); // NEW ROUTE
+router.post('/subjects', admin, bookController.createSubject);
+router.get('/subjects/stats', SubjectController.getSubjectStats);
+router.get('/subjects/:id', SubjectController.getSubjectById);
+router.put('/subjects/:id', admin, SubjectController.updateSubject);
+router.delete('/subjects/:id', admin, SubjectController.deleteSubject);
 
 // PUBLISHER ROUTES
+// GET /publishers returns a plain array, or a paginated object with ?isPagination=true (dashboard).
 router.get('/publishers', bookController.getPublishers);
-router.post('/publishers', bookController.createPublisher); // NEW ROUTE
+router.post('/publishers', admin, bookController.createPublisher);
+router.get('/publishers/stats', PublisherController.getPublisherStats);
+router.get('/publishers/:id', PublisherController.getPublisherById);
+router.put('/publishers/:id', admin, PublisherController.updatePublisher);
+router.delete('/publishers/:id', admin, PublisherController.deletePublisher);
 
-// PEOPLE ROUTES (for Authors, Commentators, etc.)
+// PEOPLE ROUTES (authors, commentators, editors, ... used by the book forms)
 router.get('/people', bookController.getPeople);
-router.post('/people', bookController.createPerson); // NEW ROUTE
+router.post('/people', admin, bookController.createPerson);
 
-
-// BORROW ROUTES
-router.post('/borrows/borrow', isAuthenticate, BorrowController.borrowBook);
-router.put('/borrows/return/:id', isAuthenticate, BorrowController.returnBook);
-router.get('/borrows/borrowed', isAuthenticate, BorrowController.getBorrowedBooks);
-
-// User borrow routes
-router.get('/borrows/my-borrows', isAuthenticate, BorrowController.getMyBorrows);
-
-// Admin borrow routes
-router.get('/borrows/all', isAuthenticate, BorrowController.getAllBorrows);
-router.get('/borrows/user/:userId', isAuthenticate, BorrowController.getUserBorrows);
-router.get('/borrows/overdue', isAuthenticate, BorrowController.getOverdueBooks);
-router.get('/borrows/statistics', isAuthenticate, BorrowController.getBorrowStatistics);
-router.post('/borrows/send-reminders', isAuthenticate, BorrowController.sendDueDateReminders);
-router.post('/borrows/send-overdue-notifications', isAuthenticate, BorrowController.sendOverdueNotifications);
-
-// AUTHOR ROUTES
+// AUTHOR ROUTES (dashboard)
 router.get('/authors', AuthorController.getAllAuthors);
 router.get('/authors/stats', AuthorController.getAuthorStats);
 router.get('/authors/:id', AuthorController.getAuthorById);
-router.post('/authors', isAuthenticate, AuthorController.createAuthor);
-router.put('/authors/:id', isAuthenticate, AuthorController.updateAuthor);
-router.delete('/authors/:id', isAuthenticate, AuthorController.deleteAuthor);
+router.post('/authors', admin, AuthorController.createAuthor);
+router.put('/authors/:id', admin, AuthorController.updateAuthor);
+router.delete('/authors/:id', admin, AuthorController.deleteAuthor);
 
-// PUBLISHER ROUTES (Dashboard/Admin routes)
-// GET /publishers is handled by bookController.getPublishers with isPagination parameter
-router.get('/publishers/stats', PublisherController.getPublisherStats);
-router.get('/publishers/:id', PublisherController.getPublisherById);
-// POST /publishers is handled by bookController.createPublisher (line 102) for backward compatibility
-// For authenticated admin operations, use PublisherController methods
-router.put('/publishers/:id', isAuthenticate, PublisherController.updatePublisher);
-router.delete('/publishers/:id', isAuthenticate, PublisherController.deletePublisher);
+// BORROW ROUTES
+// Any logged-in user can borrow, list their own borrows, and return their own borrow
+// (ownership is checked in the controller; admins can return any borrow).
+router.post('/borrows/borrow', isAuthenticate, BorrowController.borrowBook);
+router.put('/borrows/return/:id', isAuthenticate, BorrowController.returnBook);
+router.get('/borrows/my-borrows', isAuthenticate, BorrowController.getMyBorrows);
 
-// CATEGORY ROUTES
-router.get('/categories', CategoryController.getAllCategories);
-router.get('/categories/stats', CategoryController.getCategoryStats);
-router.get('/categories/:id', CategoryController.getCategoryById);
-router.post('/categories', isAuthenticate, CategoryController.createCategory);
-router.put('/categories/:id', isAuthenticate, CategoryController.updateCategory);
-router.delete('/categories/:id', isAuthenticate, CategoryController.deleteCategory);
-
-// SUBJECT ROUTES
-router.get('/subjects', SubjectController.getAllSubjects);
-router.get('/subjects/stats', SubjectController.getSubjectStats);
-router.get('/subjects/:id', SubjectController.getSubjectById);
-router.post('/subjects', isAuthenticate, SubjectController.createSubject);
-router.put('/subjects/:id', isAuthenticate, SubjectController.updateSubject);
-router.delete('/subjects/:id', isAuthenticate, SubjectController.deleteSubject);
+// Admin borrow routes (expose other users' names/emails or send mass email)
+router.get('/borrows/borrowed', admin, BorrowController.getBorrowedBooks);
+router.get('/borrows/all', admin, BorrowController.getAllBorrows);
+router.get('/borrows/user/:userId', admin, BorrowController.getUserBorrows);
+router.get('/borrows/overdue', admin, BorrowController.getOverdueBooks);
+router.get('/borrows/statistics', admin, BorrowController.getBorrowStatistics);
+router.post('/borrows/send-reminders', admin, BorrowController.sendDueDateReminders);
+router.post('/borrows/send-overdue-notifications', admin, BorrowController.sendOverdueNotifications);
 
 module.exports = router;

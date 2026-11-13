@@ -1,5 +1,4 @@
 const mongoose = require('mongoose');
-const { subject } = require('./subject.model'); // adjust path
 
 const category = mongoose.Schema({
    title: {
@@ -7,8 +6,10 @@ const category = mongoose.Schema({
       required: true,
    },
    normalizedTitle: { type: String, required: false },
+   // Embedded copies of subjects ({ _id, title, normalizedTitle }). Stored as Mixed, which is what
+   // the previous `[subject]` declaration resolved to (that import was always undefined).
    subjects: {
-      type: [subject],
+      type: [mongoose.Schema.Types.Mixed],
       default: []
    }
 });

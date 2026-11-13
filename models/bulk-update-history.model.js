@@ -100,6 +100,6 @@ const bulkUpdateHistorySchema = new mongoose.Schema({
 // Index for faster queries
 bulkUpdateHistorySchema.index({ userId: 1, createdAt: -1 });
 bulkUpdateHistorySchema.index({ status: 1, createdAt: -1 });
-bulkUpdateHistorySchema.index({ updateId: 1 });
+// (updateId already has a unique index from `unique: true`; declaring it again made index creation fail.)
 
 module.exports = mongoose.model('BulkUpdateHistory', bulkUpdateHistorySchema);

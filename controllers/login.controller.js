@@ -2,16 +2,20 @@ const authService = require('../services/auth.service');
 const tokenService = require('../services/token.service');
 
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
-  console.log("login controller", { email, password: password ? '***' : null });
+  const { email, username, password } = req.body;
 
   try {
-    const user = await authService.login(email, password);
+    const user = await authService.login(email || username, password);
 
     const accessToken = tokenService.generateAccessToken(user);
     const refreshToken = tokenService.generateRefreshToken(user);
 
-    res.status(200).json({ accessToken, refreshToken });
+    // Include the (password-free) user so the client doesn't need a second /auth/profile call.
+    res.status(200).json({
+      accessToken,
+      refreshToken,
+      user: { _id: user._id, id: user._id, email: user.email, username: user.username, role: user.role }
+    });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -50,10 +54,9 @@ exports.updateProfile = async (req, res) => {
 };
 
 exports.getProfile = async (req, res) => {
-  const userId = req.user.id; // From JWT token
-
   try {
-    const user = await authService.getUser(userId);
+    // isAuthenticate already loaded the user without the password.
+    const user = req.user;
     res.status(200).json({ user });
   } catch (err) {
     res.status(400).json({ error: err.message });

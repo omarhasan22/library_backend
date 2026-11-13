@@ -24,10 +24,10 @@ class BorrowController {
   async returnBook(req, res) {
     try {
       const borrowId = req.params.id;
-      const returnedBorrow = await BorrowService.returnBook(borrowId);
+      const returnedBorrow = await BorrowService.returnBook(borrowId, req.user);
       res.status(200).json(returnedBorrow);
     } catch (err) {
-      res.status(400).json({ error: err.message });
+      res.status(err.status || 400).json({ error: err.message });
     }
   }
 

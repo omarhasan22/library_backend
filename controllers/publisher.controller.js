@@ -1,26 +1,18 @@
 const Publisher = require('../models/publisher.model');
+const { normalizeArabicText, parsePagination, buildNameSearch } = require('../utils/text');
 
 class PublisherController {
    // Get all publishers
    async getAllPublishers(req, res) {
       try {
-         const { page = 1, limit = 10, search = '' } = req.query;
-         const query = {};
+         const { search = '' } = req.query;
+         const { page, limit, skip } = parsePagination(req.query);
+         const query = buildNameSearch(search, 'title', 'normalizedTitle');
 
-         if (search) {
-            query.$or = [
-               { title: { $regex: search, $options: 'i' } },
-               { normalizedTitle: { $regex: search, $options: 'i' } }
-            ];
-         }
-
-         const publishers = await Publisher.find(query)
-            .sort({ title: 1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .exec();
-
-         const total = await Publisher.countDocuments(query);
+         const [publishers, total] = await Promise.all([
+            Publisher.find(query).sort({ title: 1 }).skip(skip).limit(limit).lean(),
+            Publisher.countDocuments(query)
+         ]);
 
          res.json({
             publishers,
@@ -51,8 +43,10 @@ class PublisherController {
       try {
          const { title } = req.body;
 
-         // Create normalized title for searching
-         const normalizedTitle = title.toLowerCase().trim();
+         if (!title || !String(title).trim()) {
+            return res.status(400).json({ error: 'Title is required' });
+         }
+         const normalizedTitle = normalizeArabicText(title);
 
          const publisher = new Publisher({
             title,
@@ -71,9 +65,13 @@ class PublisherController {
       try {
          const { title } = req.body;
 
+         if (!title || !String(title).trim()) {
+            return res.status(400).json({ error: 'Title is required' });
+         }
+
          const updateData = {
             title,
-            normalizedTitle: title.toLowerCase().trim()
+            normalizedTitle: normalizeArabicText(title)
          };
 
          const publisher = await Publisher.findByIdAndUpdate(
@@ -108,7 +106,7 @@ class PublisherController {
    // Get publisher statistics
    async getPublisherStats(req, res) {
       try {
-         const totalPublishers = await Publisher.countDocuments();
+         const totalPublishers = await Publisher.estimatedDocumentCount();
 
          res.json({
             totalPublishers

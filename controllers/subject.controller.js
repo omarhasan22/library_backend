@@ -1,26 +1,18 @@
 const Subject = require('../models/subject.model');
+const { normalizeArabicText, parsePagination, buildNameSearch } = require('../utils/text');
 
 class SubjectController {
    // Get all subjects
    async getAllSubjects(req, res) {
       try {
-         const { page = 1, limit = 10, search = '' } = req.query;
-         const query = {};
+         const { search = '' } = req.query;
+         const { page, limit, skip } = parsePagination(req.query);
+         const query = buildNameSearch(search, 'title', 'normalizedTitle');
 
-         if (search) {
-            query.$or = [
-               { title: { $regex: search, $options: 'i' } },
-               { normalizedTitle: { $regex: search, $options: 'i' } }
-            ];
-         }
-
-         const subjects = await Subject.find(query)
-            .sort({ title: 1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .exec();
-
-         const total = await Subject.countDocuments(query);
+         const [subjects, total] = await Promise.all([
+            Subject.find(query).sort({ title: 1 }).skip(skip).limit(limit).lean(),
+            Subject.countDocuments(query)
+         ]);
 
          res.json({
             subjects,
@@ -51,8 +43,10 @@ class SubjectController {
       try {
          const { title } = req.body;
 
-         // Create normalized title for searching
-         const normalizedTitle = title.toLowerCase().trim();
+         if (!title || !String(title).trim()) {
+            return res.status(400).json({ error: 'Title is required' });
+         }
+         const normalizedTitle = normalizeArabicText(title);
 
          const subject = new Subject({
             title,
@@ -71,9 +65,13 @@ class SubjectController {
       try {
          const { title } = req.body;
 
+         if (!title || !String(title).trim()) {
+            return res.status(400).json({ error: 'Title is required' });
+         }
+
          const updateData = {
             title,
-            normalizedTitle: title.toLowerCase().trim()
+            normalizedTitle: normalizeArabicText(title)
          };
 
          const subject = await Subject.findByIdAndUpdate(
@@ -108,7 +106,7 @@ class SubjectController {
    // Get subject statistics
    async getSubjectStats(req, res) {
       try {
-         const totalSubjects = await Subject.countDocuments();
+         const totalSubjects = await Subject.estimatedDocumentCount();
 
          res.json({
             totalSubjects

@@ -1,30 +1,22 @@
 const Author = require('../models/author.model');
+const { normalizeArabicText, parsePagination, buildNameSearch } = require('../utils/text');
 
 class AuthorController {
    // Get all authors
    async getAllAuthors(req, res) {
       try {
-         const { page = 1, limit = 10, search = '', type = '' } = req.query;
-         const query = {};
-
-         if (search) {
-            query.$or = [
-               { name: { $regex: search, $options: 'i' } },
-               { normalizedName: { $regex: search, $options: 'i' } }
-            ];
-         }
+         const { search = '', type = '' } = req.query;
+         const { page, limit, skip } = parsePagination(req.query);
+         const query = buildNameSearch(search, 'name', 'normalizedName');
 
          if (type) {
-            query.type = type;
+            query.type = String(type);
          }
 
-         const authors = await Author.find(query)
-            .sort({ name: 1 })
-            .limit(limit * 1)
-            .skip((page - 1) * limit)
-            .exec();
-
-         const total = await Author.countDocuments(query);
+         const [authors, total] = await Promise.all([
+            Author.find(query).sort({ name: 1 }).skip(skip).limit(limit).lean(),
+            Author.countDocuments(query)
+         ]);
 
          res.json({
             authors,
@@ -54,13 +46,13 @@ class AuthorController {
    async createAuthor(req, res) {
       try {
          const { name, dateOfBirth, dateOfDeath, type } = req.body;
-
-         // Create normalized name for searching
-         const normalizedName = name.toLowerCase().trim();
+         if (!name || !String(name).trim()) {
+            return res.status(400).json({ error: 'Name is required' });
+         }
 
          const author = new Author({
             name,
-            normalizedName,
+            normalizedName: normalizeArabicText(name),
             dateOfBirth: dateOfBirth ? new Date(dateOfBirth) : undefined,
             dateOfDeath: dateOfDeath ? new Date(dateOfDeath) : undefined,
             type
@@ -78,11 +70,12 @@ class AuthorController {
       try {
          const { name, dateOfBirth, dateOfDeath, type } = req.body;
 
-         const updateData = { type };
+         const updateData = {};
+         if (type) updateData.type = type;
 
          if (name) {
             updateData.name = name;
-            updateData.normalizedName = name.toLowerCase().trim();
+            updateData.normalizedName = normalizeArabicText(name);
          }
 
          if (dateOfBirth) {
@@ -125,9 +118,9 @@ class AuthorController {
    // Get author statistics
    async getAuthorStats(req, res) {
       try {
-         const totalAuthors = await Author.countDocuments();
-         const authorsByType = await Author.aggregate([
-            { $group: { _id: '$type', count: { $sum: 1 } } }
+         const [totalAuthors, authorsByType] = await Promise.all([
+            Author.estimatedDocumentCount(),
+            Author.aggregate([{ $group: { _id: '$type', count: { $sum: 1 } } }])
          ]);
 
          res.json({

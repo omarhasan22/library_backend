@@ -3,12 +3,12 @@ const { BookService } = require('../services/book.service');
 const path = require('path');
 const fs = require('fs'); // For deleting original file
 const sharp = require('sharp'); // For image processing
+const Publisher = require('../models/publisher.model');
+const { parsePagination, buildNameSearch } = require('../utils/text');
 
 class BookController {
 
   async createBook(req, res) {
-    console.log("Received book data:", req.body);
-
     try {
       const bookData = { ...req.body };
 
@@ -320,7 +320,7 @@ class BookController {
 
   async getBulkUpdateHistory(req, res) {
     try {
-      const { page = 1, limit = 10 } = req.query;
+      const { page, limit } = parsePagination(req.query);
       const userId = req.user ? req.user._id : null;
 
       // If user is not admin, only show their own history
@@ -329,8 +329,8 @@ class BookController {
 
       const result = await BookService.getBulkUpdateHistory(
         filterUserId,
-        parseInt(page),
-        parseInt(limit)
+        page,
+        limit
       );
       res.status(200).json(result);
     } catch (err) {
@@ -432,29 +432,20 @@ class BookController {
   // Existing getPublishers - now supports both simple array and pagination
   async getPublishers(req, res) {
     try {
-      const { page = 1, limit = 10, search = '', isPagination } = req.query;
-      const Publisher = require('../models/publisher.model');
-      const query = {};
-
-      if (search) {
-        query.$or = [
-          { title: { $regex: search, $options: 'i' } },
-          { normalizedTitle: { $regex: search, $options: 'i' } }
-        ];
-      }
+      const { search = '', isPagination } = req.query;
 
       // Check if pagination is requested
       const usePagination = isPagination === 'true' || isPagination === true;
 
       if (usePagination) {
         // Return paginated response (for dashboard)
-        const publishers = await Publisher.find(query)
-          .sort({ title: 1 })
-          .limit(limit * 1)
-          .skip((page - 1) * limit)
-          .exec();
+        const { page, limit, skip } = parsePagination(req.query);
+        const query = buildNameSearch(search, 'title', 'normalizedTitle');
 
-        const total = await Publisher.countDocuments(query);
+        const [publishers, total] = await Promise.all([
+          Publisher.find(query).sort({ title: 1 }).skip(skip).limit(limit).lean(),
+          Publisher.countDocuments(query)
+        ]);
 
         res.json({
           publishers,
@@ -481,16 +472,6 @@ class BookController {
       }
       const newPublisher = await BookService.createPublisher({ title });
       res.status(201).json(newPublisher);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  }
-
-  async getCategoryById(req, res) {
-    try {
-      const category = await BookService.getCategoryById(req.params['category-id']);
-      if (!category) return res.status(404).json({ error: 'Category not found' });
-      res.status(200).json(category);
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

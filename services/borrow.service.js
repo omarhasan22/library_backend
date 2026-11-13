@@ -1,20 +1,15 @@
 const Borrow = require('../models/borrow.model');
 const Book = require('../models/book.model');
-const User = require('../models/users.model');
 const EmailService = require('./email.service');
 
 class BorrowService {
   async borrowBook(data) {
-    console.log('Borrowing book:', data);
+    const [bookExists, existingBorrow] = await Promise.all([
+      Book.exists({ _id: data.book }),
+      Borrow.exists({ book: data.book, returned: false })
+    ]);
 
-    const book = await Book.findById(data.book);
-    console.log('Book found:', book);
-
-    if (!book) throw new Error('Book not found');
-
-    const existingBorrow = await Borrow.findOne({ book: data.book, returned: false });
-    console.log('Existing borrow:', existingBorrow);
-
+    if (!bookExists) throw new Error('Book not found');
     if (existingBorrow) throw new Error('Book is already borrowed');
 
     const borrow = new Borrow(data);
@@ -26,9 +21,16 @@ class BorrowService {
       .populate('user', 'username email');
   }
 
-  async returnBook(borrowId) {
+  // Users may only return their own borrow; admins may return any.
+  async returnBook(borrowId, user) {
     const borrow = await Borrow.findById(borrowId);
     if (!borrow) throw new Error('Borrow record not found');
+
+    if (user && user.role !== 'admin' && String(borrow.user) !== String(user._id)) {
+      const err = new Error('You can only return your own borrowed books');
+      err.status = 403;
+      throw err;
+    }
 
     if (borrow.returned) throw new Error('Book is already returned');
 
@@ -40,13 +42,14 @@ class BorrowService {
   async getBorrowedBooks() {
     return await Borrow.find({ returned: false })
       .populate('book', 'title authors category')
-      .populate('user', 'username email');
+      .populate('user', 'username email')
+      .lean();
   }
 
   // Admin methods
   async getAllBorrows(page = 1, limit = 20, status = 'all') {
     const skip = (page - 1) * limit;
-    let query = {};
+    const query = {};
 
     if (status === 'active') {
       query.returned = false;
@@ -54,14 +57,16 @@ class BorrowService {
       query.returned = true;
     }
 
-    const borrows = await Borrow.find(query)
-      .populate('book', 'title authors category')
-      .populate('user', 'username email')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit);
-
-    const total = await Borrow.countDocuments(query);
+    const [borrows, total] = await Promise.all([
+      Borrow.find(query)
+        .populate('book', 'title authors category')
+        .populate('user', 'username email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Borrow.countDocuments(query)
+    ]);
 
     return {
       borrows,
@@ -72,7 +77,7 @@ class BorrowService {
   }
 
   async getUserBorrows(userId, status = 'all') {
-    let query = { user: userId };
+    const query = { user: userId };
 
     if (status === 'active') {
       query.returned = false;
@@ -82,28 +87,28 @@ class BorrowService {
 
     return await Borrow.find(query)
       .populate('book', 'title authors category')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
   }
 
   async getOverdueBooks() {
-    const today = new Date();
     return await Borrow.find({
       returned: false,
-      endDate: { $lt: today }
+      endDate: { $lt: new Date() }
     })
       .populate('book', 'title authors')
-      .populate('user', 'username email');
+      .populate('user', 'username email')
+      .lean();
   }
 
+  // Returns full documents (not lean) because sendDueDateReminders saves them.
   async getBooksNearDue(days = 3) {
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + days);
 
-    const today = new Date();
-
     return await Borrow.find({
       returned: false,
-      endDate: { $gte: today, $lte: futureDate },
+      endDate: { $gte: new Date(), $lte: futureDate },
       emailNotificationSent: false
     })
       .populate('book', 'title authors')
@@ -111,75 +116,67 @@ class BorrowService {
   }
 
   async sendDueDateReminders() {
-    try {
-      const nearDueBooks = await this.getBooksNearDue(3);
-      const results = [];
+    const nearDueBooks = await this.getBooksNearDue(3);
+    const results = [];
 
-      for (const borrow of nearDueBooks) {
-        try {
-          await EmailService.sendDueDateReminder(
-            borrow.user.email,
-            borrow.user.username,
-            borrow.book.title,
-            borrow.endDate
-          );
+    for (const borrow of nearDueBooks) {
+      // The user or book may have been deleted since the borrow was made.
+      if (!borrow.user || !borrow.book) continue;
+      try {
+        await EmailService.sendDueDateReminder(
+          borrow.user.email,
+          borrow.user.username,
+          borrow.book.title,
+          borrow.endDate
+        );
 
-          // Mark notification as sent
-          borrow.emailNotificationSent = true;
-          borrow.notificationDate = new Date();
-          await borrow.save();
+        // Mark notification as sent
+        borrow.emailNotificationSent = true;
+        borrow.notificationDate = new Date();
+        await borrow.save();
 
-          results.push({ success: true, borrowId: borrow._id });
-        } catch (error) {
-          console.error(`Failed to send email for borrow ${borrow._id}:`, error);
-          results.push({ success: false, borrowId: borrow._id, error: error.message });
-        }
+        results.push({ success: true, borrowId: borrow._id });
+      } catch (error) {
+        console.error(`Failed to send email for borrow ${borrow._id}:`, error);
+        results.push({ success: false, borrowId: borrow._id, error: error.message });
       }
-
-      return results;
-    } catch (error) {
-      console.error('Error in sendDueDateReminders:', error);
-      throw error;
     }
+
+    return results;
   }
 
   async sendOverdueNotifications() {
-    try {
-      const overdueBooks = await this.getOverdueBooks();
-      const results = [];
+    const overdueBooks = await this.getOverdueBooks();
+    const results = [];
 
-      for (const borrow of overdueBooks) {
-        try {
-          const daysOverdue = Math.floor((new Date() - new Date(borrow.endDate)) / (1000 * 60 * 60 * 24));
+    for (const borrow of overdueBooks) {
+      if (!borrow.user || !borrow.book) continue;
+      try {
+        const daysOverdue = Math.floor((new Date() - new Date(borrow.endDate)) / (1000 * 60 * 60 * 24));
 
-          await EmailService.sendOverdueNotification(
-            borrow.user.email,
-            borrow.user.username,
-            borrow.book.title,
-            daysOverdue
-          );
+        await EmailService.sendOverdueNotification(
+          borrow.user.email,
+          borrow.user.username,
+          borrow.book.title,
+          daysOverdue
+        );
 
-          results.push({ success: true, borrowId: borrow._id, daysOverdue });
-        } catch (error) {
-          console.error(`Failed to send overdue email for borrow ${borrow._id}:`, error);
-          results.push({ success: false, borrowId: borrow._id, error: error.message });
-        }
+        results.push({ success: true, borrowId: borrow._id, daysOverdue });
+      } catch (error) {
+        console.error(`Failed to send overdue email for borrow ${borrow._id}:`, error);
+        results.push({ success: false, borrowId: borrow._id, error: error.message });
       }
-
-      return results;
-    } catch (error) {
-      console.error('Error in sendOverdueNotifications:', error);
-      throw error;
     }
+
+    return results;
   }
 
   async getBorrowStatistics() {
-    const totalBorrows = await Borrow.countDocuments();
-    const activeBorrows = await Borrow.countDocuments({ returned: false });
-    const overdueBooks = await Borrow.countDocuments({
-      returned: false,
-      endDate: { $lt: new Date() }
-    });
+    const [totalBorrows, activeBorrows, overdueBooks] = await Promise.all([
+      Borrow.countDocuments(),
+      Borrow.countDocuments({ returned: false }),
+      Borrow.countDocuments({ returned: false, endDate: { $lt: new Date() } })
+    ]);
 
     return {
       totalBorrows,

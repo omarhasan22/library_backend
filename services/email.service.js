@@ -1,5 +1,13 @@
 const nodemailer = require('nodemailer');
 
+// Usernames and book titles are user-controlled; escape them before putting them in HTML.
+const escapeHtml = (value) => String(value ?? '')
+   .replace(/&/g, '&amp;')
+   .replace(/</g, '&lt;')
+   .replace(/>/g, '&gt;')
+   .replace(/"/g, '&quot;')
+   .replace(/'/g, '&#39;');
+
 class EmailService {
    constructor() {
       this.transporter = nodemailer.createTransport({
@@ -7,7 +15,7 @@ class EmailService {
          port: process.env.EMAIL_PORT || 587,
          secure: false,
          auth: {
-            user: process.env.EMAIL_USER || 'omar.hasan3894@gmail.com',
+            user: process.env.EMAIL_USER,
             pass: process.env.EMAIL_PASS
          }
       });
@@ -24,7 +32,7 @@ class EmailService {
           
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <p style="font-size: 16px; margin-bottom: 15px;">
-              <strong>عزيزي/عزيزتي ${userName}،</strong>
+              <strong>عزيزي/عزيزتي ${escapeHtml(userName)}،</strong>
             </p>
             
             <p style="font-size: 14px; line-height: 1.6; margin-bottom: 15px;">
@@ -32,7 +40,7 @@ class EmailService {
             </p>
             
             <div style="background-color: #fff; padding: 15px; border-right: 4px solid #007bff; margin: 15px 0;">
-              <p style="margin: 5px 0;"><strong>اسم الكتاب:</strong> ${bookTitle}</p>
+              <p style="margin: 5px 0;"><strong>اسم الكتاب:</strong> ${escapeHtml(bookTitle)}</p>
               <p style="margin: 5px 0;"><strong>تاريخ الإرجاع المطلوب:</strong> ${new Date(dueDate).toLocaleDateString('ar-EG')}</p>
               <p style="margin: 5px 0;"><strong>الأيام المتبقية:</strong> 3 أيام</p>
             </div>
@@ -72,7 +80,7 @@ class EmailService {
           
           <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <p style="font-size: 16px; margin-bottom: 15px;">
-              <strong>عزيزي/عزيزتي ${userName}،</strong>
+              <strong>عزيزي/عزيزتي ${escapeHtml(userName)}،</strong>
             </p>
             
             <p style="font-size: 14px; line-height: 1.6; margin-bottom: 15px;">
@@ -80,7 +88,7 @@ class EmailService {
             </p>
             
             <div style="background-color: #fff; padding: 15px; border-right: 4px solid #dc3545; margin: 15px 0;">
-              <p style="margin: 5px 0;"><strong>اسم الكتاب:</strong> ${bookTitle}</p>
+              <p style="margin: 5px 0;"><strong>اسم الكتاب:</strong> ${escapeHtml(bookTitle)}</p>
               <p style="margin: 5px 0; color: #dc3545;"><strong>عدد أيام التأخير:</strong> ${daysOverdue} يوم</p>
             </div>
             

@@ -4,138 +4,282 @@ const fs = require('fs');
 const BookModel = require('../models/book.model');
 const Category = require('../models/category.model');
 const Subject = require('../models/subject.model');
-const Author = require('../models/author.model'); // This is your 'Person' model for authors, commentators, etc.
+const Author = require('../models/author.model'); // Every person type: authors, commentators, editors, ...
 const Publisher = require('../models/publisher.model');
 const BulkUpdateHistory = require('../models/bulk-update-history.model');
 
+const { normalizeArabicText, escapeRegex } = require('../utils/text');
+
+const MAX_PAGE_SIZE = 500;
+const BULK_UPDATE_MAX_RANGE = 5000;
+
+// pageCount is optional but must be >= 1 (schema). Empty/invalid input means "not set" (null);
+// it used to become 0, which failed validation and made the whole save fail.
+function parsePageCount(value) {
+  const n = parseInt(value, 10);
+  return Number.isNaN(n) || n < 1 ? null : n;
+}
+
+// Fields the client may never set directly on a book.
+const PROTECTED_BOOK_FIELDS = new Set(['_id', '__v', 'createdAt', 'updatedAt', 'sortKeys', 'normalizedTitle']);
+
+// Reference fields on a book: [Model, name field, extra filter used when finding/creating the entity].
+const REFERENCE_FIELDS = {
+  category: [Category, 'title'],
+  subject: [Subject, 'title'],
+  publishers: [Publisher, 'title'],
+  authors: [Author, 'name', { type: 'author' }],
+  commentators: [Author, 'name', { type: 'commentator' }],
+  editors: [Author, 'name', { type: 'editor' }],
+  caretakers: [Author, 'name', { type: 'caretaker' }],
+  muhashis: [Author, 'name', { type: 'muhashi' }]
+};
+
+const PERSON_FIELDS = ['authors', 'editors', 'commentators', 'caretakers', 'muhashis'];
+const NUMERIC_FIELDS = ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'];
+
+// How each searchable field is matched against a book:
+//   text    - regex on a field stored on the book (normalized: compare Arabic-normalized forms)
+//   ref     - the text lives in another collection; matching ids are found there first so the book
+//             query is an indexed `$in` instead of a $lookup over every book
+//   numeric - exact number match, regex fallback for non-numeric input
+const SEARCH_FIELDS = {
+  title: { type: 'text', path: 'normalizedTitle', normalized: true },
+  category: { type: 'ref', path: 'category', model: Category, field: 'normalizedTitle' },
+  subject: { type: 'ref', path: 'subject', model: Subject, field: 'normalizedTitle' },
+  publishers: { type: 'ref', path: 'publishers', model: Publisher, field: 'normalizedTitle' },
+  ...Object.fromEntries(PERSON_FIELDS.map(f => [f, { type: 'ref', path: f, model: Author, field: 'normalizedName' }])),
+  roomNumber: { type: 'text', path: 'address.roomNumber' },
+  shelfNumber: { type: 'text', path: 'address.shelfNumber' },
+  wallNumber: { type: 'text', path: 'address.wallNumber' },
+  bookNumber: { type: 'text', path: 'address.bookNumber' },
+  ...Object.fromEntries(NUMERIC_FIELDS.map(f => [f, { type: 'numeric', path: f }])),
+  notes: { type: 'text', path: 'notes' }
+};
+const SEARCH_FIELD_ALIASES = { subcategory: 'subject' };
+const ANY_FIELD_KEYS = Object.keys(SEARCH_FIELDS);
+
+function searchFieldConfig(key) {
+  if (typeof key !== 'string') return null;
+  const name = Object.hasOwn(SEARCH_FIELD_ALIASES, key) ? SEARCH_FIELD_ALIASES[key] : key;
+  return Object.hasOwn(SEARCH_FIELDS, name) ? SEARCH_FIELDS[name] : null;
+}
+
+// Address order: room -> shelf -> wall -> book (numbers before text), _id as a stable tiebreaker.
+// Backed by the compound sortKeys index in book.model.js.
+function addressSortStage(dir) {
+  return {
+    $sort: {
+      'sortKeys.room': dir,
+      'sortKeys.shelf': dir,
+      'sortKeys.wall': dir,
+      'sortKeys.book': dir,
+      _id: dir
+    }
+  };
+}
+
+const LOOKUP_STAGES = [
+  { $lookup: { from: 'authors', localField: 'authors', foreignField: '_id', as: 'authorData' } },
+  { $lookup: { from: 'authors', localField: 'commentators', foreignField: '_id', as: 'commentatorData' } },
+  { $lookup: { from: 'authors', localField: 'editors', foreignField: '_id', as: 'editorData' } },
+  { $lookup: { from: 'authors', localField: 'caretakers', foreignField: '_id', as: 'caretakerData' } },
+  { $lookup: { from: 'authors', localField: 'muhashis', foreignField: '_id', as: 'muhashiData' } },
+  { $lookup: { from: 'publishers', localField: 'publishers', foreignField: '_id', as: 'publisherData' } },
+  { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'categoryData' } },
+  { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subjectData' } }
+];
+
+// $lookup returns joined documents in no guaranteed order (and MongoDB's join strategy can change it).
+// Rebuild each joined array in the order the ids are stored on the book, i.e. the order they were
+// entered, matching the book detail page. Ids that no longer resolve and duplicate ids are dropped,
+// exactly like $lookup itself does.
+function inStoredOrder(idsField, joinedField) {
+  return {
+    $reduce: {
+      input: { $ifNull: ['$' + idsField, []] },
+      initialValue: [],
+      in: {
+        $let: {
+          vars: {
+            doc: { $first: { $filter: { input: '$' + joinedField, as: 'j', cond: { $eq: ['$$j._id', '$$this'] } } } }
+          },
+          in: {
+            $cond: [
+              { $or: [{ $eq: [{ $ifNull: ['$$doc', null] }, null] }, { $in: ['$$doc', '$$value'] }] },
+              '$$value',
+              { $concatArrays: ['$$value', ['$$doc']] }
+            ]
+          }
+        }
+      }
+    }
+  };
+}
+
+// Book list response shape.
+const LIST_PROJECTION = {
+  $project: {
+    title: 1,
+    normalizedTitle: 1,
+    numberOfVolumes: 1,
+    numberOfFolders: 1,
+    editionNumber: 1,
+    publicationYear: 1,
+    pageCount: 1,
+    address: 1,
+    imageUrl: 1,
+    authors: inStoredOrder('authors', 'authorData'),
+    commentators: inStoredOrder('commentators', 'commentatorData'),
+    editors: inStoredOrder('editors', 'editorData'),
+    caretakers: inStoredOrder('caretakers', 'caretakerData'),
+    muhashis: inStoredOrder('muhashis', 'muhashiData'),
+    publishers: inStoredOrder('publishers', 'publisherData'),
+    category: { $arrayElemAt: ['$categoryData', 0] },
+    subject: { $arrayElemAt: ['$subjectData', 0] },
+    notes: 1,
+    displayAddress: {
+      $let: {
+        vars: {
+          parts: [
+            { $ifNull: ['$address.roomNumber', ''] },
+            { $ifNull: ['$address.shelfNumber', ''] },
+            { $ifNull: ['$address.wallNumber', ''] },
+            { $ifNull: ['$address.bookNumber', ''] }
+          ]
+        },
+        in: {
+          $trim: {
+            input: {
+              $concat: [
+                {
+                  $reduce: {
+                    input: '$$parts',
+                    initialValue: '',
+                    in: {
+                      $cond: [
+                        { $eq: ['$$this', ''] },
+                        '$$value',
+                        {
+                          $cond: [
+                            { $eq: ['$$value', ''] },
+                            '$$this',
+                            { $concat: ['$$value', ' / ', '$$this'] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                {
+                  $cond: [
+                    { $and: [{ $ifNull: ['$numberOfVolumes', false] }, { $gt: ['$numberOfVolumes', 1] }] },
+                    { $concat: [', v.', { $toString: '$numberOfVolumes' }] },
+                    ''
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+};
+
+// Excel export: book fields the sheet needs, and the references joined onto them in memory.
+const EXPORT_BOOK_FIELDS = {
+  title: 1, numberOfVolumes: 1, numberOfFolders: 1, editionNumber: 1, publicationYear: 1, pageCount: 1,
+  address: 1, notes: 1, createdAt: 1, updatedAt: 1,
+  authors: 1, commentators: 1, editors: 1, caretakers: 1, muhashis: 1, publishers: 1, category: 1, subject: 1
+};
+// [book field, model, display field, is array]
+const EXPORT_JOINS = [
+  ['authors', Author, 'name', true],
+  ['commentators', Author, 'name', true],
+  ['editors', Author, 'name', true],
+  ['caretakers', Author, 'name', true],
+  ['muhashis', Author, 'name', true],
+  ['publishers', Publisher, 'title', true],
+  ['category', Category, 'title', false],
+  ['subject', Subject, 'title', false]
+];
+
 class BookService {
 
-  // Add this at the top of your BookService file
-  normalizeArabicText = (text) => {
-    if (!text) return '';
-    console.log("text ", text);
+  normalizeArabicText = normalizeArabicText;
+  escapeRegex = escapeRegex;
 
-    return text
-      .replace(/[\u064B-\u0652\u0670\u0640]/g, '')
-      .replace(/[\u0622\u0623\u0625\u0627]/g, 'ا')
-      .replace(/\u0649/g, 'ي')
-      .replace(/\u0629/g, 'ه')
-      .replace(/[\u0654\u0655]/g, '')
-      .replace(/\u0624/g, 'و')
-      .replace(/\u0626/g, 'ي')
-      .replace(/\u0621/g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  };
-
-  // Updated resolveEntity method
+  // Resolves a reference field from the client: ObjectId strings / {_id} objects are used directly,
+  // names/titles are looked up by their normalized form and created if missing.
   async resolveEntity(data, Model, field, filter = {}) {
     if (!data) return null;
 
-    let dataArray;
-    let isOriginalInputArray = Array.isArray(data);
-
-    if (isOriginalInputArray) {
-      dataArray = data;
-    } else {
-      dataArray = [data];
-    }
-
+    const isOriginalInputArray = Array.isArray(data);
+    const dataArray = isOriginalInputArray ? data : [data];
     const ids = [];
 
     // Determine the normalized field name
     const normalizedField = field === 'title' ? 'normalizedTitle' :
       field === 'name' ? 'normalizedName' : null;
 
+    const findOrCreate = async (value) => {
+      const query = normalizedField
+        ? { [normalizedField]: normalizeArabicText(value), ...filter }
+        : { [field]: value, ...filter };
+
+      let doc = await Model.findOne(query);
+      if (!doc) {
+        const newDoc = { ...filter, [field]: value };
+        if (normalizedField) newDoc[normalizedField] = normalizeArabicText(value);
+        doc = await new Model(newDoc).save();
+      }
+      return doc._id;
+    };
+
+    // Sequential on purpose: the same new name twice in one array must create one record.
     for (const item of dataArray) {
-      // If item is a string that looks like an ObjectId, use it directly
       if (typeof item === 'string' && mongoose.Types.ObjectId.isValid(item.replace(/"/g, ''))) {
         ids.push(item.replace(/"/g, ''));
-      }
-      // If item is an object with an _id, use it directly
-      else if (typeof item === 'object' && item !== null && item._id && mongoose.Types.ObjectId.isValid(item._id)) {
+      } else if (typeof item === 'object' && item !== null && item._id && mongoose.Types.ObjectId.isValid(item._id)) {
         ids.push(item._id);
-      }
-      // If item is an object with the specified field, try to find/create
-      else if (typeof item === 'object' && item !== null && item[field]) {
-        let query;
-        if (normalizedField) {
-          const normalizedValue = this.normalizeArabicText(item[field]);
-          query = { [normalizedField]: normalizedValue, ...filter };
-        } else {
-          query = { [field]: item[field], ...filter };
-        }
-
-        let doc = await Model.findOne(query);
-        if (!doc) {
-          const newDoc = { ...filter, [field]: item[field] };
-          if (normalizedField) {
-            newDoc[normalizedField] = this.normalizeArabicText(item[field]);
-          }
-          doc = await new Model(newDoc).save();
-        }
-        ids.push(doc._id);
-      }
-      // Fallback: If it's a string but not a valid ObjectId, assume it's a name/title
-      else if (typeof item === 'string' && !mongoose.Types.ObjectId.isValid(item.replace(/"/g, ''))) {
-        const cleanValue = item.replace(/"/g, '');
-
-        let query;
-        if (normalizedField) {
-          const normalizedValue = this.normalizeArabicText(cleanValue);
-          query = { [normalizedField]: normalizedValue, ...filter };
-        } else {
-          query = { [field]: cleanValue, ...filter };
-        }
-
-        let doc = await Model.findOne(query);
-        if (!doc) {
-          const newDoc = { ...filter, [field]: cleanValue };
-          if (normalizedField) {
-            newDoc[normalizedField] = this.normalizeArabicText(cleanValue);
-          }
-          doc = await new Model(newDoc).save();
-        }
-        ids.push(doc._id);
+      } else if (typeof item === 'object' && item !== null && item[field]) {
+        ids.push(await findOrCreate(item[field]));
+      } else if (typeof item === 'string' && item.replace(/"/g, '')) {
+        ids.push(await findOrCreate(item.replace(/"/g, '')));
       }
     }
 
     return isOriginalInputArray ? ids : ids[0];
   }
 
-  async createBook(bookData) {
-    // All existing resolveEntity calls remain the same
-    const categoryId = await this.resolveEntity(bookData.category, Category, 'title');
-    const subjectId = await this.resolveEntity(bookData.subject, Subject, 'title');
-    const publisherIds = await this.resolveEntity(bookData.publishers, Publisher, 'title');
-    const authorIds = await this.resolveEntity(bookData.authors, Author, 'name', { type: 'author' });
-    const commentatorids = await this.resolveEntity(bookData.commentators, Author, 'name', { type: 'commentator' });
-    const editorIds = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
-    const caretakerIds = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
-    const muhashisIds = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
+  // Resolves every reference field present in bookData, in parallel (fields are independent).
+  async resolveReferences(bookData) {
+    const entries = Object.entries(REFERENCE_FIELDS).filter(([key]) => bookData[key]);
+    const values = await Promise.all(entries.map(([key, [Model, field, filter]]) =>
+      this.resolveEntity(bookData[key], Model, field, filter)));
+    return Object.fromEntries(entries.map(([key], i) => [key, values[i]]));
+  }
 
-    let pageCountValue = parseInt(bookData.pageCount, 10);
-    if (isNaN(pageCountValue) || pageCountValue < 0) {
-      pageCountValue = 0;
-      console.warn(`Invalid pageCount received: ${bookData.pageCount}. Defaulting to ${pageCountValue}.`);
-    }
+  async createBook(bookData) {
+    const refs = await this.resolveReferences(bookData);
+
     const bookObj = {
       title: bookData.title,
-      normalizedTitle: this.normalizeArabicText(bookData.title), // ADD THIS LINE
-      authors: authorIds,
-      commentators: commentatorids,
-      editors: editorIds,
-      caretakers: caretakerIds,
-      muhashis: muhashisIds,
-      category: categoryId,
-      subject: subjectId,
-      publishers: publisherIds,
+      normalizedTitle: normalizeArabicText(bookData.title),
+      authors: refs.authors ?? null,
+      commentators: refs.commentators ?? null,
+      editors: refs.editors ?? null,
+      caretakers: refs.caretakers ?? null,
+      muhashis: refs.muhashis ?? null,
+      category: refs.category ?? null,
+      subject: refs.subject ?? null,
+      publishers: refs.publishers ?? null,
       numberOfVolumes: bookData.numberOfVolumes,
       numberOfFolders: bookData.numberOfFolders,
       editionNumber: bookData.editionNumber,
       publicationYear: bookData.publicationYear,
-      pageCount: pageCountValue,
+      pageCount: parsePageCount(bookData.pageCount) ?? undefined,
       address: {
         roomNumber: bookData.address?.roomNumber,
         shelfNumber: bookData.address?.shelfNumber,
@@ -151,64 +295,98 @@ class BookService {
     return this.getBookById(book._id);
   }
 
-  // Updated updateBook method - add normalizedTitle when title is updated
   async updateBook(id, bookData) {
     const updatePayload = { ...bookData };
 
-    // ADD THIS: If title is being updated, also update normalizedTitle
+    // Never let the client overwrite system-managed fields or inject update operators.
+    for (const key of Object.keys(updatePayload)) {
+      if (key.startsWith('$') || PROTECTED_BOOK_FIELDS.has(key)) delete updatePayload[key];
+    }
+
     if (bookData.title) {
-      updatePayload.normalizedTitle = this.normalizeArabicText(bookData.title);
+      updatePayload.normalizedTitle = normalizeArabicText(bookData.title);
     }
 
     if (bookData.imagePath) {
       updatePayload.imageUrl = bookData.imagePath;
-    } else {
-      delete updatePayload.imagePath;
     }
+    delete updatePayload.imagePath;
 
     if (updatePayload.pageCount !== undefined) {
-      let pageCountValue = parseInt(updatePayload.pageCount, 10);
-      if (isNaN(pageCountValue) || pageCountValue < 0) {
-        pageCountValue = 0;
-        console.warn(`Invalid pageCount received during update: ${updatePayload.pageCount}. Defaulting to ${pageCountValue}.`);
-      }
-      updatePayload.pageCount = pageCountValue;
+      updatePayload.pageCount = parsePageCount(updatePayload.pageCount); // null clears it
     }
 
-    // All existing resolveEntity calls remain the same
-    if (bookData.category) {
-      updatePayload.category = await this.resolveEntity(bookData.category, Category, 'title');
-    }
-    if (bookData.subject) {
-      updatePayload.subject = await this.resolveEntity(bookData.subject, Subject, 'title');
-    }
-    if (bookData.publishers) {
-      updatePayload.publishers = await this.resolveEntity(bookData.publishers, Publisher, 'title');
-    }
-    if (bookData.authors) {
-      updatePayload.authors = await this.resolveEntity(bookData.authors, Author, 'name', { type: 'author' });
-    }
-    if (bookData.commentators) {
-      updatePayload.commentators = await this.resolveEntity(bookData.commentators, Author, 'name', { type: 'commentator' });
-    }
-    if (bookData.editors) {
-      updatePayload.editors = await this.resolveEntity(bookData.editors, Author, 'name', { type: 'editor' });
-    }
-    if (bookData.caretakers) {
-      updatePayload.caretakers = await this.resolveEntity(bookData.caretakers, Author, 'name', { type: 'caretaker' });
-    }
-    if (bookData.muhashis) {
-      updatePayload.muhashis = await this.resolveEntity(bookData.muhashis, Author, 'name', { type: 'muhashi' });
-    }
+    Object.assign(updatePayload, await this.resolveReferences(bookData));
 
-    let updatedBook = await BookModel.findByIdAndUpdate(id, updatePayload, { new: true });
-    let book = await this.getBookById(updatedBook._id);
-    return book;
+    const updatedBook = await BookModel.findByIdAndUpdate(id, updatePayload, { new: true });
+    if (!updatedBook) return null;
+    return this.getBookById(updatedBook._id);
   }
 
-  escapeRegex(str = '') {
-    // escape regex special chars so user input can't break pattern matching
-    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Builds a MongoDB filter that only touches fields stored on the book itself, so it can run
+  // before any $lookup. Related collections (authors, publishers, categories, subjects) are searched
+  // first and turned into an indexed `$in` on the book's reference field. Returns null for "no filter".
+  //   query === 'advanced' -> searchTerm is a JSON array of { field, value } (all must match)
+  //   query === <field>    -> searchTerm must match that field
+  //   otherwise            -> searchTerm may match any field
+  async buildSearchFilter(query = '', searchTerm = '') {
+    const idLookups = new Map(); // one lookup per (collection, field, pattern) per request
+
+    const refIds = (cfg, pattern) => {
+      const key = `${cfg.model.modelName}|${cfg.field}|${pattern}`;
+      if (!idLookups.has(key)) {
+        // Cache the promise (.exec()), not the Query: a Mongoose Query can't be awaited twice.
+        idLookups.set(key, cfg.model.distinct('_id', { [cfg.field]: { $regex: pattern, $options: 'i' } }).exec());
+      }
+      return idLookups.get(key);
+    };
+
+    const fieldCondition = async (cfg, raw, normalized) => {
+      if (cfg.type === 'ref') {
+        return { [cfg.path]: { $in: await refIds(cfg, escapeRegex(normalized)) } };
+      }
+      if (cfg.type === 'numeric') {
+        const n = Number(raw);
+        if (!Number.isNaN(n)) return { [cfg.path]: n };
+        return { [cfg.path]: { $regex: escapeRegex(raw), $options: 'i' } };
+      }
+      return { [cfg.path]: { $regex: escapeRegex(cfg.normalized ? normalized : raw), $options: 'i' } };
+    };
+
+    const anyFieldCondition = async (raw) => {
+      const normalized = normalizeArabicText(raw) || raw;
+      const conditions = await Promise.all(
+        ANY_FIELD_KEYS.map(key => fieldCondition(SEARCH_FIELDS[key], raw, normalized)));
+      return { $or: conditions };
+    };
+
+    if (query === 'advanced') {
+      let filters;
+      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
+      if (!Array.isArray(filters)) filters = [];
+
+      const conditions = await Promise.all(filters.map((filter) => {
+        const { field, value } = filter || {};
+        const raw = String(value ?? '');
+        if (field === 'all') return anyFieldCondition(raw.trim());
+        const cfg = searchFieldConfig(field);
+        if (cfg) return fieldCondition(cfg, raw, normalizeArabicText(raw));
+        // Unknown field: match it literally if it's a plain field name, otherwise match nothing.
+        if (typeof field === 'string' && /^[A-Za-z_][\w.]*$/.test(field)) {
+          return { [field]: { $regex: escapeRegex(raw), $options: 'i' } };
+        }
+        return { _id: null };
+      }));
+
+      return conditions.length ? { $and: conditions } : null;
+    }
+
+    const raw = String(searchTerm || '').trim();
+    if (!raw) return null;
+
+    const cfg = searchFieldConfig(query);
+    if (!cfg) return anyFieldCondition(raw);
+    return fieldCondition(cfg, raw, normalizeArabicText(raw) || raw);
   }
 
   async getAllBooks(
@@ -216,564 +394,105 @@ class BookService {
     searchTerm = '',
     page = 1,
     limit = 30,
-    sortDirection = 'asc' // keep sort direction, but sortField removed
+    sortDirection = 'asc'
   ) {
-    // Normalize numeric params
-    page = Number(page) || 1;
-    limit = Number(limit) || 30;
-    const skip = (page - 1) * limit;
+    page = Math.max(1, Number(page) || 1);
+    limit = Math.min(MAX_PAGE_SIZE, Math.max(1, Number(limit) || 30));
     const sortDir = sortDirection === 'desc' ? -1 : 1;
 
-    // Lookups
-    const lookupStages = [
-      { $lookup: { from: 'authors', localField: 'authors', foreignField: '_id', as: 'authorData' } },
-      { $lookup: { from: 'authors', localField: 'commentators', foreignField: '_id', as: 'commentatorData' } },
-      { $lookup: { from: 'authors', localField: 'editors', foreignField: '_id', as: 'editorData' } },
-      { $lookup: { from: 'authors', localField: 'caretakers', foreignField: '_id', as: 'caretakerData' } },
-      { $lookup: { from: 'authors', localField: 'muhashis', foreignField: '_id', as: 'muhashiData' } },
-      { $lookup: { from: 'publishers', localField: 'publishers', foreignField: '_id', as: 'publisherData' } },
-      { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'categoryData' } },
-      { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subjectData' } }
-    ];
+    const filter = await this.buildSearchFilter(query, searchTerm);
+    const match = filter ? [{ $match: filter }] : [];
 
-    // Build matchStage
-    const matchStage = [];
-    if (query === 'advanced') {
-      let filters = [];
-      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
-
-      const conditions = filters.map(({ field, value }) => {
-        const normalizedValue = this.normalizeArabicText(value);
-        const normEsc = this.escapeRegex(normalizedValue);
-        const rawEsc = this.escapeRegex(value);
-        const pathMap = {
-          title: { path: 'normalizedTitle', useNormalized: true },
-          category: { path: 'categoryData.normalizedTitle', useNormalized: true },
-          subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
-          publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
-
-          authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
-          editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
-          commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
-          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
-          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
-
-          roomNumber: { path: 'address.roomNumber', useNormalized: false },
-          shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
-          wallNumber: { path: 'address.wallNumber', useNormalized: false },
-          bookNumber: { path: 'address.bookNumber', useNormalized: false },
-
-          numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
-          numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
-          editionNumber: { path: 'editionNumber', useNormalized: false },
-          publicationYear: { path: 'publicationYear', useNormalized: false },
-          pageCount: { path: 'pageCount', useNormalized: false },
-          notes: { path: 'notes', useNormalized: false }
-        };
-
-        const cfg = pathMap[field] || { path: field, useNormalized: false };
-
-        // Handle array fields with $elemMatch
-        if (cfg.isArray) {
-          const parts = cfg.path.split('.');
-          const parent = parts.slice(0, -1).join('.');
-          const childField = parts.slice(-1)[0];
-          if (cfg.useNormalized) {
-            return { [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } };
-          } else {
-            return { [parent]: { $elemMatch: { [childField]: { $regex: rawEsc, $options: 'i' } } } };
+    // Three independent queries in parallel:
+    //  1. the page itself: filter -> sort (sortKeys index) -> skip/limit -> join only this page
+    //  2. counts for the stat cards over the filtered set (no joins needed)
+    //  3. the collection size from metadata
+    const [books, statsResult, totalBooks] = await Promise.all([
+      BookModel.aggregate([
+        ...match,
+        addressSortStage(sortDir),
+        { $skip: (page - 1) * limit },
+        { $limit: limit },
+        ...LOOKUP_STAGES,
+        LIST_PROJECTION
+      ]).allowDiskUse(true),
+      BookModel.aggregate([
+        ...match,
+        { $project: { authors: 1, publishers: 1 } },
+        {
+          $facet: {
+            filtered: [{ $count: 'n' }],
+            // Count real ids only: books with no author must not count as an extra "author".
+            authors: [{ $unwind: '$authors' }, { $group: { _id: '$authors' } }, { $count: 'n' }],
+            publishers: [{ $unwind: '$publishers' }, { $group: { _id: '$publishers' } }, { $count: 'n' }]
           }
         }
-        // Handle normalized text fields with regex partial matching
-        else if (cfg.useNormalized) {
-          return { [cfg.path]: { $regex: normEsc, $options: 'i' } };
-        }
-        // Handle numeric fields with exact match (no change)
-        else if (['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].includes(field)) {
-          const numValue = Number(value);
-          if (!isNaN(numValue)) {
-            return { [cfg.path]: numValue };
-          }
-          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
-        }
-        // Handle other non-normalized text fields with regex
-        else {
-          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
-        }
-      });
+      ]).allowDiskUse(true),
+      BookModel.estimatedDocumentCount()
+    ]);
 
-      if (conditions.length) matchStage.push({ $match: { $and: conditions } });
-    }
-    else if (searchTerm && String(searchTerm).trim()) {
-      const rawTerm = String(searchTerm).trim();
-      const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
-
-      const rawEsc = this.escapeRegex(rawTerm);
-      const normEsc = this.escapeRegex(normalizedSearchTerm);
-
-      const pathMap = {
-        title: { path: 'normalizedTitle', useNormalized: true },
-        category: { path: 'categoryData.normalizedTitle', useNormalized: true },
-        subcategory: { path: 'subjectData.normalizedTitle', useNormalized: true },
-        subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
-        publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
-
-        authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
-        editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
-        commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
-        caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
-        muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
-
-        roomNumber: { path: 'address.roomNumber', useNormalized: false },
-        shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
-        wallNumber: { path: 'address.wallNumber', useNormalized: false },
-        bookNumber: { path: 'address.bookNumber', useNormalized: false },
-
-        numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
-        numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
-        editionNumber: { path: 'editionNumber', useNormalized: false },
-        publicationYear: { path: 'publicationYear', useNormalized: false },
-        pageCount: { path: 'pageCount', useNormalized: false },
-        notes: { path: 'notes', useNormalized: false }
-      };
-
-      const fieldConfig = pathMap[query] || null;
-
-      if (fieldConfig) {
-        if (fieldConfig.isArray) {
-          if (fieldConfig.useNormalized) {
-            matchStage.push({
-              $match: {
-                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
-                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: normEsc, $options: 'i' } }
-                }
-              }
-            });
-          } else {
-            matchStage.push({
-              $match: {
-                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
-                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: rawEsc, $options: 'i' } }
-                }
-              }
-            });
-          }
-        } else {
-          matchStage.push({
-            $match: {
-              [fieldConfig.path]: { $regex: fieldConfig.useNormalized ? normEsc : rawEsc, $options: 'i' }
-            }
-          });
-        }
-      } else {
-        const orConditions = [];
-
-        ['title', 'category', 'subject', 'subcategory', 'publishers'].forEach(k => {
-          const cfg = pathMap[k];
-          if (!cfg) return;
-          orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
-        });
-
-        ['authors', 'editors', 'commentators', 'caretakers', 'muhashis'].forEach(k => {
-          const cfg = pathMap[k];
-          if (!cfg) return;
-          const parts = cfg.path.split('.');
-          const parent = parts.slice(0, -1).join('.');
-          const childField = parts.slice(-1)[0];
-          orConditions.push({ [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } });
-          orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
-        });
-
-        ['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber', 'notes'].forEach(k => {
-          const cfg = pathMap[k];
-          if (!cfg) return;
-          orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
-        });
-
-        if (!Number.isNaN(Number(rawTerm))) {
-          const n = Number(rawTerm);
-          ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].forEach(k => {
-            const cfg = pathMap[k];
-            if (!cfg) return;
-            orConditions.push({ [cfg.path]: n });
-          });
-        } else {
-          ['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].forEach(k => {
-            const cfg = pathMap[k];
-            if (!cfg) return;
-            orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
-          });
-        }
-
-        if (orConditions.length) {
-          matchStage.push({ $match: { $or: orConditions } });
-        } else {
-          console.warn('No search conditions created for non-advanced searchTerm:', rawTerm);
-        }
-      }
-    }
-
-    // Projection stage
-    const projectStage = {
-      $project: {
-        title: 1,
-        normalizedTitle: 1,
-        numberOfVolumes: 1,
-        numberOfFolders: 1,
-        editionNumber: 1,
-        publicationYear: 1,
-        pageCount: 1,
-        address: 1,
-        imageUrl: 1,
-        authors: '$authorData',
-        commentators: '$commentatorData',
-        editors: '$editorData',
-        caretakers: '$caretakerData',
-        muhashis: '$muhashiData',
-        publishers: '$publisherData',
-        category: { $arrayElemAt: ['$categoryData', 0] },
-        subject: { $arrayElemAt: ['$subjectData', 0] },
-        notes: 1,
-        displayAddress: {
-          $let: {
-            vars: {
-              parts: [
-                { $ifNull: ['$address.roomNumber', ''] },
-                { $ifNull: ['$address.shelfNumber', ''] },
-                { $ifNull: ['$address.wallNumber', ''] },
-                { $ifNull: ['$address.bookNumber', ''] }
-              ]
-            },
-            in: {
-              $trim: {
-                input: {
-                  $concat: [
-                    {
-                      $reduce: {
-                        input: '$$parts',
-                        initialValue: '',
-                        in: {
-                          $cond: [
-                            { $eq: ['$$this', ''] },
-                            '$$value',
-                            {
-                              $cond: [
-                                { $eq: ['$$value', ''] },
-                                '$$this',
-                                { $concat: ['$$value', ' / ', '$$this'] }
-                              ]
-                            }
-                          ]
-                        }
-                      }
-                    },
-                    {
-                      $cond: [
-                        { $and: [{ $ifNull: ['$numberOfVolumes', false] }, { $gt: ['$numberOfVolumes', 1] }] },
-                        { $concat: [', v.', { $toString: '$numberOfVolumes' }] },
-                        ''
-                      ]
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    };
-
-    // Sort by the precomputed address sort keys maintained in book.model.js
-    // (room → shelf → wall → book, numbers before text). _id breaks ties so
-    // pagination is stable across requests.
-    const sortStage = {
-      $sort: {
-        'sortKeys.room': sortDir,
-        'sortKeys.shelf': sortDir,
-        'sortKeys.wall': sortDir,
-        'sortKeys.book': sortDir,
-        _id: sortDir
-      }
-    };
-
-    // Drop the joined arrays before sorting so the sort handles slim base documents.
-    const stripLookupsStage = {
-      $project: {
-        authorData: 0, commentatorData: 0, editorData: 0, caretakerData: 0,
-        muhashiData: 0, publisherData: 0, categoryData: 0, subjectData: 0
-      }
-    };
-
-    // Search filters match on joined fields (author names, category titles, ...),
-    // so lookups must run before $match when filtering. Without filters, the sort
-    // runs straight off the compound sortKeys index, and the lookups + display
-    // projection only run for the single page of results inside $facet.
-    const pipeline = [
-      ...(matchStage.length ? [...lookupStages, ...matchStage, stripLookupsStage] : []),
-      sortStage,
-      {
-        $facet: {
-          paginatedResults: [
-            { $skip: skip },
-            { $limit: limit },
-            ...lookupStages,
-            projectStage
-          ],
-          counts: [
-            { $count: 'filteredCount' }
-          ],
-          uniqueAuthors: [
-            { $unwind: { path: '$authors', preserveNullAndEmptyArrays: true } },
-            { $group: { _id: '$authors' } },
-            { $count: 'count' }
-          ],
-          uniquePublishers: [
-            { $unwind: { path: '$publishers', preserveNullAndEmptyArrays: true } },
-            { $group: { _id: '$publishers' } },
-            { $count: 'count' }
-          ]
-        }
-      },
-      {
-        $project: {
-          paginatedResults: 1,
-          filteredCount: { $ifNull: [{ $arrayElemAt: ['$counts.filteredCount', 0] }, 0] },
-          uniqueAuthors: { $ifNull: [{ $arrayElemAt: ['$uniqueAuthors.count', 0] }, 0] },
-          uniquePublishers: { $ifNull: [{ $arrayElemAt: ['$uniquePublishers.count', 0] }, 0] }
-        }
-      }
-    ];
-
-    // Optional: uncomment to debug the pipeline shape in logs
-    // console.dir(pipeline, { depth: null });
-
-    // Execute aggregation
-    const aggResult = await BookModel.aggregate(pipeline).allowDiskUse(true);
-
-    // Process results
-    const resultDoc = aggResult[0] || { paginatedResults: [], filteredCount: 0, uniqueAuthors: 0, uniquePublishers: 0 };
-    const totalAll = await BookModel.countDocuments();
+    const stats = statsResult[0] || {};
+    const firstCount = (arr) => (arr && arr[0] ? arr[0].n : 0);
 
     return {
-      books: resultDoc.paginatedResults || [],
-      totalBooks: totalAll || 0,
-      filteredCount: resultDoc.filteredCount || 0,
-      uniqueAuthors: resultDoc.uniqueAuthors || 0,
-      uniquePublishers: resultDoc.uniquePublishers || 0
+      books,
+      totalBooks: totalBooks || 0,
+      filteredCount: firstCount(stats.filtered),
+      uniqueAuthors: firstCount(stats.authors),
+      uniquePublishers: firstCount(stats.publishers)
     };
+  }
+
+  // Loads books for an export with their references joined in memory: one sorted book query plus
+  // one query per related collection, instead of 8 $lookups for every exported book (~5x faster
+  // for a full export). Joined arrays keep the stored order, like the book list.
+  async findBooksForExport(filter, sortDir) {
+    const books = await BookModel.aggregate([
+      ...(filter ? [{ $match: filter }] : []),
+      addressSortStage(sortDir),
+      { $project: EXPORT_BOOK_FIELDS }
+    ]).allowDiskUse(true);
+
+    // Collect referenced ids per collection, then fetch each collection once.
+    const idsByModel = new Map();
+    for (const [field, Model, displayField] of EXPORT_JOINS) {
+      if (!idsByModel.has(Model)) idsByModel.set(Model, { displayField, ids: new Set() });
+      const { ids } = idsByModel.get(Model);
+      for (const book of books) {
+        const value = book[field];
+        for (const id of Array.isArray(value) ? value : value ? [value] : []) ids.add(String(id));
+      }
+    }
+    const docsByModel = new Map(await Promise.all([...idsByModel].map(async ([Model, { displayField, ids }]) => {
+      const docs = await Model.find({ _id: { $in: [...ids] } }).select(displayField).lean();
+      return [Model, new Map(docs.map(d => [String(d._id), d]))];
+    })));
+
+    for (const book of books) {
+      for (const [field, Model, , isArray] of EXPORT_JOINS) {
+        const docs = docsByModel.get(Model);
+        if (isArray) {
+          // Drop duplicate and unresolvable ids, as $lookup does.
+          const seen = new Set();
+          book[field] = (book[field] || []).map(String)
+            .filter(id => docs.has(id) && !seen.has(id) && seen.add(id))
+            .map(id => docs.get(id));
+        } else {
+          book[field] = book[field] ? docs.get(String(book[field])) : undefined;
+        }
+      }
+    }
+    return books;
   }
 
   async exportBooksToExcel(query = '', searchTerm = '', sortDirection = 'asc') {
     const ExcelJS = require('exceljs');
     const sortDir = sortDirection === 'desc' ? -1 : 1;
 
-    // Reuse the same lookup and match stages from getAllBooks
-    const lookupStages = [
-      { $lookup: { from: 'authors', localField: 'authors', foreignField: '_id', as: 'authorData' } },
-      { $lookup: { from: 'authors', localField: 'commentators', foreignField: '_id', as: 'commentatorData' } },
-      { $lookup: { from: 'authors', localField: 'editors', foreignField: '_id', as: 'editorData' } },
-      { $lookup: { from: 'authors', localField: 'caretakers', foreignField: '_id', as: 'caretakerData' } },
-      { $lookup: { from: 'authors', localField: 'muhashis', foreignField: '_id', as: 'muhashiData' } },
-      { $lookup: { from: 'publishers', localField: 'publishers', foreignField: '_id', as: 'publisherData' } },
-      { $lookup: { from: 'categories', localField: 'category', foreignField: '_id', as: 'categoryData' } },
-      { $lookup: { from: 'subjects', localField: 'subject', foreignField: '_id', as: 'subjectData' } }
-    ];
-
-    // Build matchStage (same logic as getAllBooks)
-    const matchStage = [];
-    if (query === 'advanced') {
-      let filters = [];
-      try { filters = JSON.parse(searchTerm); } catch (e) { filters = []; }
-
-      const conditions = filters.map(({ field, value }) => {
-        const normalizedValue = this.normalizeArabicText(value);
-        const normEsc = this.escapeRegex(normalizedValue);
-        const rawEsc = this.escapeRegex(value);
-        const pathMap = {
-          title: { path: 'normalizedTitle', useNormalized: true },
-          category: { path: 'categoryData.normalizedTitle', useNormalized: true },
-          subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
-          publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
-          authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
-          editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
-          commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
-          caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
-          muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
-          roomNumber: { path: 'address.roomNumber', useNormalized: false },
-          shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
-          wallNumber: { path: 'address.wallNumber', useNormalized: false },
-          bookNumber: { path: 'address.bookNumber', useNormalized: false },
-          numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
-          numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
-          editionNumber: { path: 'editionNumber', useNormalized: false },
-          publicationYear: { path: 'publicationYear', useNormalized: false },
-          pageCount: { path: 'pageCount', useNormalized: false },
-          notes: { path: 'notes', useNormalized: false }
-        };
-
-        const cfg = pathMap[field] || { path: field, useNormalized: false };
-
-        // Handle array fields with $elemMatch
-        if (cfg.isArray) {
-          const parts = cfg.path.split('.');
-          const parent = parts.slice(0, -1).join('.');
-          const childField = parts.slice(-1)[0];
-          if (cfg.useNormalized) {
-            return { [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } };
-          } else {
-            return { [parent]: { $elemMatch: { [childField]: { $regex: rawEsc, $options: 'i' } } } };
-          }
-        }
-        // Handle normalized text fields with regex partial matching
-        else if (cfg.useNormalized) {
-          return { [cfg.path]: { $regex: normEsc, $options: 'i' } };
-        }
-        // Handle numeric fields with exact match (no change)
-        else if (['numberOfVolumes', 'numberOfFolders', 'editionNumber', 'publicationYear', 'pageCount'].includes(field)) {
-          const numValue = Number(value);
-          if (!isNaN(numValue)) {
-            return { [cfg.path]: numValue };
-          }
-          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
-        }
-        // Handle other non-normalized text fields with regex
-        else {
-          return { [cfg.path]: { $regex: rawEsc, $options: 'i' } };
-        }
-      });
-
-      if (conditions.length) matchStage.push({ $match: { $and: conditions } });
-    }
-    else if (searchTerm && String(searchTerm).trim()) {
-      const rawTerm = String(searchTerm).trim();
-      const normalizedSearchTerm = this.normalizeArabicText(rawTerm) || rawTerm;
-      const rawEsc = this.escapeRegex(rawTerm);
-      const normEsc = this.escapeRegex(normalizedSearchTerm);
-
-      const pathMap = {
-        title: { path: 'normalizedTitle', useNormalized: true },
-        category: { path: 'categoryData.normalizedTitle', useNormalized: true },
-        subcategory: { path: 'subjectData.normalizedTitle', useNormalized: true },
-        subject: { path: 'subjectData.normalizedTitle', useNormalized: true },
-        publishers: { path: 'publisherData.normalizedTitle', useNormalized: true },
-        authors: { path: 'authorData.normalizedName', useNormalized: true, isArray: true },
-        editors: { path: 'editorData.normalizedName', useNormalized: true, isArray: true },
-        commentators: { path: 'commentatorData.normalizedName', useNormalized: true, isArray: true },
-        caretakers: { path: 'caretakerData.normalizedName', useNormalized: true, isArray: true },
-        muhashis: { path: 'muhashiData.normalizedName', useNormalized: true, isArray: true },
-        roomNumber: { path: 'address.roomNumber', useNormalized: false },
-        shelfNumber: { path: 'address.shelfNumber', useNormalized: false },
-        wallNumber: { path: 'address.wallNumber', useNormalized: false },
-        bookNumber: { path: 'address.bookNumber', useNormalized: false },
-        numberOfVolumes: { path: 'numberOfVolumes', useNormalized: false },
-        numberOfFolders: { path: 'numberOfFolders', useNormalized: false },
-        editionNumber: { path: 'editionNumber', useNormalized: false },
-        publicationYear: { path: 'publicationYear', useNormalized: false },
-        pageCount: { path: 'pageCount', useNormalized: false },
-        notes: { path: 'notes', useNormalized: false }
-      };
-
-      const fieldConfig = pathMap[query] || null;
-      if (fieldConfig) {
-        if (fieldConfig.isArray) {
-          if (fieldConfig.useNormalized) {
-            matchStage.push({
-              $match: {
-                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
-                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: normEsc, $options: 'i' } }
-                }
-              }
-            });
-          } else {
-            matchStage.push({
-              $match: {
-                [fieldConfig.path.split('.').slice(0, -1).join('.')]: {
-                  $elemMatch: { [fieldConfig.path.split('.').slice(-1)[0]]: { $regex: rawEsc, $options: 'i' } }
-                }
-              }
-            });
-          }
-        } else {
-          matchStage.push({
-            $match: {
-              [fieldConfig.path]: { $regex: fieldConfig.useNormalized ? normEsc : rawEsc, $options: 'i' }
-            }
-          });
-        }
-      } else {
-        const orConditions = [];
-        ['title', 'category', 'subject', 'subcategory', 'publishers'].forEach(k => {
-          const cfg = pathMap[k];
-          if (!cfg) return;
-          orConditions.push({ [cfg.path]: { $regex: normEsc, $options: 'i' } });
-        });
-        ['authors', 'editors', 'commentators', 'caretakers', 'muhashis'].forEach(k => {
-          const cfg = pathMap[k];
-          if (!cfg) return;
-          const parts = cfg.path.split('.');
-          const parent = parts.slice(0, -1).join('.');
-          const childField = parts.slice(-1)[0];
-          orConditions.push({ [parent]: { $elemMatch: { [childField]: { $regex: normEsc, $options: 'i' } } } });
-        });
-        ['roomNumber', 'shelfNumber', 'wallNumber', 'bookNumber', 'notes'].forEach(k => {
-          const cfg = pathMap[k];
-          if (!cfg) return;
-          orConditions.push({ [cfg.path]: { $regex: rawEsc, $options: 'i' } });
-        });
-        if (orConditions.length) {
-          matchStage.push({ $match: { $or: orConditions } });
-        }
-      }
-    }
-
-    // Projection stage (same as getAllBooks)
-    const projectStage = {
-      $project: {
-        title: 1,
-        normalizedTitle: 1,
-        numberOfVolumes: 1,
-        numberOfFolders: 1,
-        editionNumber: 1,
-        publicationYear: 1,
-        pageCount: 1,
-        address: 1,
-        imageUrl: 1,
-        authors: '$authorData',
-        commentators: '$commentatorData',
-        editors: '$editorData',
-        caretakers: '$caretakerData',
-        muhashis: '$muhashiData',
-        publishers: '$publisherData',
-        category: { $arrayElemAt: ['$categoryData', 0] },
-        subject: { $arrayElemAt: ['$subjectData', 0] },
-        notes: 1,
-        createdAt: 1,
-        updatedAt: 1
-      }
-    };
-
-    // Sort stage (same keys as getAllBooks, see book.model.js). Runs before the
-    // projection because the projection drops sortKeys.
-    const sortStage = {
-      $sort: {
-        'sortKeys.room': sortDir,
-        'sortKeys.shelf': sortDir,
-        'sortKeys.wall': sortDir,
-        'sortKeys.book': sortDir,
-        _id: sortDir
-      }
-    };
-
-    // Build pipeline WITHOUT pagination
-    const pipeline = [
-      ...lookupStages,
-      ...matchStage,
-      sortStage,
-      projectStage
-    ];
-
-    // Execute aggregation to get ALL matching books
-    const books = await BookModel.aggregate(pipeline).allowDiskUse(true);
+    // Same filter as the book list, so the export contains exactly what the user searched for.
+    // Filter and sort run on the slim book documents first; the joins run once per exported book.
+    const filter = await this.buildSearchFilter(query, searchTerm);
+    const books = await this.findBooksForExport(filter, sortDir);
 
     // Create Excel workbook
     const workbook = new ExcelJS.Workbook();
@@ -881,7 +600,9 @@ class BookService {
       throw new Error('Room number is required for locations export');
     }
 
-    // Lookup stages for subject and category (must come before match stages that reference them)
+    const sortDir = sortDirection === 'desc' ? -1 : 1;
+
+    // Only the subject title is exported.
     const lookupStages = [
       {
         $lookup: {
@@ -889,14 +610,6 @@ class BookService {
           localField: 'subject',
           foreignField: '_id',
           as: 'subject'
-        }
-      },
-      {
-        $lookup: {
-          from: 'categories',
-          localField: 'category',
-          foreignField: '_id',
-          as: 'category'
         }
       }
     ];
@@ -1010,8 +723,9 @@ class BookService {
 
     const pipeline = [
       roomFilter, // Apply room filter first for performance
-      ...lookupStages, // Then do lookups
-      ...additionalFilters, // Then apply additional filters (if any)
+      ...additionalFilters, // These only use fields stored on the book, so they run before the lookup
+      addressSortStage(sortDir), // Rows in shelf order (before the projection drops sortKeys)
+      ...lookupStages,
       projectStage,
       unwindStage
     ];
@@ -1195,6 +909,10 @@ class BookService {
         throw new Error('Book number "from" must be less than or equal to "to"');
       }
 
+      if (bookNumberTo - bookNumberFrom + 1 > BULK_UPDATE_MAX_RANGE) {
+        throw new Error(`Book number range is too large (max ${BULK_UPDATE_MAX_RANGE} books per update)`);
+      }
+
       // Build query with $and to combine all conditions
       const queryConditions = [
         { 'address.shelfNumber': String(criteria.shelfNumber) }
@@ -1265,12 +983,11 @@ class BookService {
         }
       }
 
-      // Count matching books before update
-      const countBefore = await BookModel.countDocuments(query);
+      const countBefore = booksBeforeUpdate.length;
 
-      // Perform bulk update
+      // Update exactly the books captured above, so the undo history always matches what changed.
       const updateResult = await BookModel.updateMany(
-        query,
+        { _id: { $in: booksBeforeUpdate.map(b => b._id) } },
         { $set: { subject: subjectId } }
       );
 
@@ -1378,6 +1095,10 @@ class BookService {
         throw new Error('Book number "from" must be less than or equal to "to"');
       }
 
+      if (bookNumberTo - bookNumberFrom + 1 > BULK_UPDATE_MAX_RANGE) {
+        throw new Error(`Book number range is too large (max ${BULK_UPDATE_MAX_RANGE} books per update)`);
+      }
+
       // Build query with $and to combine all conditions
       const queryConditions = [
         { 'address.shelfNumber': String(criteria.shelfNumber) }
@@ -1448,12 +1169,11 @@ class BookService {
         }
       }
 
-      // Count matching books before update
-      const countBefore = await BookModel.countDocuments(query);
+      const countBefore = booksBeforeUpdate.length;
 
-      // Perform bulk update
+      // Update exactly the books captured above, so the undo history always matches what changed.
       const updateResult = await BookModel.updateMany(
-        query,
+        { _id: { $in: booksBeforeUpdate.map(b => b._id) } },
         { $set: { category: categoryId } }
       );
 
@@ -1700,15 +1420,21 @@ class BookService {
   }
 
   async deleteBook(id) {
-    // Before deleting the book, consider deleting its associated image file
-    const bookToDelete = await BookModel.findById(id);
-    if (bookToDelete && bookToDelete.imageUrl) {
-      const imagePath = path.join(__dirname, '../', bookToDelete.imageUrl); // Adjust path as needed
-      fs.unlink(imagePath, (err) => {
-        if (err) console.error('Error deleting associated image file:', err);
-      });
+    const deleted = await BookModel.findByIdAndDelete(id);
+
+    // Remove the cover image, but only if it really is a file inside assets/books.
+    // imageUrl comes from the client, so never unlink a path that resolves anywhere else.
+    if (deleted && deleted.imageUrl) {
+      const booksDir = path.resolve(__dirname, '../assets/books');
+      const relativePath = String(deleted.imageUrl).replace(/^[\\/]+/, '');
+      const imagePath = path.resolve(__dirname, '..', relativePath);
+      if (path.dirname(imagePath) === booksDir) {
+        fs.unlink(imagePath, (err) => {
+          if (err && err.code !== 'ENOENT') console.error('Error deleting associated image file:', err);
+        });
+      }
     }
-    return await BookModel.findByIdAndDelete(id);
+    return deleted;
   }
 
   async getCategories() {
@@ -1726,12 +1452,12 @@ class BookService {
 
   async createCategory(categoryData) {
     const { title } = categoryData;
-    const normalizedTitle = this.normalizeArabicText(title); // ADD THIS
+    const normalizedTitle = normalizeArabicText(title);
     let category = await Category.findOne({ normalizedTitle }); // CHANGE THIS
     if (!category) {
       category = new Category({
         title,
-        normalizedTitle // ADD THIS
+        normalizedTitle
       });
       await category.save();
     }
@@ -1739,17 +1465,17 @@ class BookService {
   }
 
   async getsubjects() {
-    return await Subject.find();
+    return await Subject.find().lean();
   }
 
   async createSubject(subjectData) {
     const { title } = subjectData;
-    const normalizedTitle = this.normalizeArabicText(title); // ADD THIS
+    const normalizedTitle = normalizeArabicText(title);
     let subject = await Subject.findOne({ normalizedTitle }); // CHANGE THIS
     if (!subject) {
       subject = new Subject({
         title,
-        normalizedTitle // ADD THIS
+        normalizedTitle
       });
       await subject.save();
     }
@@ -1757,18 +1483,18 @@ class BookService {
   }
 
   async getPeople() {
-    return await Author.find();
+    return await Author.find().lean();
   }
 
   async createPerson(personData) {
     const { name, type } = personData;
-    const normalizedName = this.normalizeArabicText(name); // ADD THIS
-    let person = await Author.findOne({ normalizedName, type }); // CHANGE THIS
+    const normalizedName = normalizeArabicText(name);
+    let person = await Author.findOne({ normalizedName, type });
     if (!person) {
       person = new Author({
         name,
         type,
-        normalizedName // ADD THIS
+        normalizedName
       });
       await person.save();
     }
@@ -1777,12 +1503,12 @@ class BookService {
 
   async createPublisher(publisherData) {
     const { title } = publisherData;
-    const normalizedTitle = this.normalizeArabicText(title); // ADD THIS
+    const normalizedTitle = normalizeArabicText(title);
     let publisher = await Publisher.findOne({ normalizedTitle }); // CHANGE THIS
     if (!publisher) {
       publisher = new Publisher({
         title,
-        normalizedTitle // ADD THIS
+        normalizedTitle
       });
       await publisher.save();
     }
@@ -1790,7 +1516,7 @@ class BookService {
   }
 
   async getPublishers() {
-    return await Publisher.find();
+    return await Publisher.find().lean();
   }
 }
 
