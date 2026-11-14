@@ -9,7 +9,9 @@ const SLIDE_FIELDS = [
   'template', 'theme', 'title', 'subtitle', 'body', 'attribution', 'eventDate', 'eventTime',
   'location', 'imageFit', 'duration', 'isActive', 'startDate', 'endDate'
 ];
-const SETTINGS_FIELDS = ['tickerEnabled', 'tickerText', 'showClock', 'hijriOffset', 'transition'];
+const SETTINGS_FIELDS = [
+  'tickerEnabled', 'tickerText', 'hadithEnabled', 'hadithText', 'showClock', 'hijriOffset', 'transition'
+];
 
 // What each template cannot be shown without.
 const REQUIRED = {

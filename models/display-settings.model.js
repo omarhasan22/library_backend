@@ -6,6 +6,9 @@ const displaySettingsSchema = new mongoose.Schema({
   tickerEnabled: { type: Boolean, default: false },
   // One news item per line.
   tickerText: { type: String, trim: true, default: '', maxlength: [3000, 'نص الشريط طويل جداً'] },
+  hadithEnabled: { type: Boolean, default: false },
+  // One hadith per line, optionally "text | source". Shown one at a time in the bottom bar.
+  hadithText: { type: String, trim: true, default: '', maxlength: [5000, 'نص الأحاديث طويل جداً'] },
   showClock: { type: Boolean, default: true },
   // Days to add to the computed Hijri date, to match the locally announced month start.
   hijriOffset: { type: Number, min: -3, max: 3, default: 0 },
